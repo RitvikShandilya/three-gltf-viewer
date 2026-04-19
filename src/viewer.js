@@ -2206,7 +2206,9 @@ export class Viewer {
 			btn.setAttribute('role', 'tab');
 			btn.dataset.row = i;
 			btn.dataset.label = String(row.label).toLowerCase();
-			btn.setAttribute('aria-selected', i === this.ui.activeRow ? 'true' : 'false');
+			btn.dataset.type = row.type || '';
+			const isFocused = i === this.ui.activeRow;
+			btn.setAttribute('aria-selected', isFocused ? 'true' : 'false');
 			btn.setAttribute(
 				'aria-label',
 				`${String(row.label).toUpperCase()} — ${this._formatValue(row) || 'open'}`,
@@ -2214,9 +2216,29 @@ export class Viewer {
 			btn.innerHTML = `<span class="pm__row-label"></span><span class="pm__row-value"></span>`;
 			btn.querySelector('.pm__row-label').textContent = String(row.label).toUpperCase();
 			const valueEl = btn.querySelector('.pm__row-value');
+
 			if (row.icon) {
+				// Camera-preset-style inline icon glyphs — unchanged.
 				valueEl.classList.add('pm__row-icon');
 				valueEl.innerHTML = this._iconFor(row.icon);
+			} else if (row.type === 'bool') {
+				// Figma toggle: small framed checkbox, glyph visible when on.
+				// Uses currentColor so it inverts correctly on the focused row.
+				const on = !!(row.get ? row.get() : false);
+				valueEl.innerHTML = `
+					<span class="pm__row-toggle" data-on="${on ? 'true' : 'false'}" aria-hidden="true">
+						<span class="pm__row-toggle-glyph">\u2713</span>
+					</span>`;
+			} else if (row.type === 'enum' || row.type === 'num') {
+				// Horizontal selector spec: ◀ value ▶. Arrows are visually
+				// gated to the focused row via CSS (see .pm__row-inline-arrows).
+				const valueText = this._formatValue(row);
+				valueEl.classList.add('pm__row-inline-arrows');
+				valueEl.innerHTML =
+					`<span class="pm__row-inline-arrow" aria-hidden="true">\u25C0</span>` +
+					`<span class="pm__row-inline-value"></span>` +
+					`<span class="pm__row-inline-arrow" aria-hidden="true">\u25B6</span>`;
+				valueEl.querySelector('.pm__row-inline-value').textContent = valueText;
 			} else {
 				valueEl.textContent = this._formatValue(row);
 			}
@@ -2232,7 +2254,50 @@ export class Viewer {
 		railEl.appendChild(noMatch);
 		this.ui.railNoMatchEl = noMatch;
 
+		// GTA V scroll-indicator chevron: shown only when the rail
+		// content overflows. Sticky-positioned at the bottom of the rail.
+		const scrollInd = document.createElement('div');
+		scrollInd.className = 'pm__rail-scroll-indicator';
+		scrollInd.setAttribute('aria-hidden', 'true');
+		scrollInd.dataset.visible = 'false';
+		scrollInd.innerHTML = `<span class="pm__rail-scroll-indicator-chevron">\u25BC</span>`;
+		railEl.appendChild(scrollInd);
+		this.ui.railScrollIndicatorEl = scrollInd;
+
+		// Wire overflow detection once per render. ResizeObserver handles
+		// filter-driven height changes; scroll handler hides the chevron
+		// when the user reaches the bottom.
+		this._wireRailScrollIndicator(railEl);
+
 		if (query) this._applyRailFilter();
+	}
+
+	/** Shows/hides the sticky scroll chevron based on rail overflow state. */
+	_wireRailScrollIndicator(railEl) {
+		if (!railEl || !this.ui.railScrollIndicatorEl) return;
+		const update = () => {
+			const el = this.ui.railScrollIndicatorEl;
+			if (!el || !railEl.isConnected) return;
+			const overflows = railEl.scrollHeight - railEl.clientHeight > 2;
+			const atBottom =
+				railEl.scrollTop + railEl.clientHeight >= railEl.scrollHeight - 2;
+			el.dataset.visible = overflows && !atBottom ? 'true' : 'false';
+		};
+		// Defer so layout has a chance to settle after innerHTML replacement.
+		requestAnimationFrame(update);
+		if (this._railScrollHandler) {
+			railEl.removeEventListener('scroll', this._railScrollHandler);
+		}
+		this._railScrollHandler = update;
+		railEl.addEventListener('scroll', update, { passive: true });
+		if (this._railResizeObserver) {
+			try { this._railResizeObserver.disconnect(); } catch (e) { /* noop */ }
+		}
+		if (typeof ResizeObserver !== 'undefined') {
+			this._railResizeObserver = new ResizeObserver(update);
+			this._railResizeObserver.observe(railEl);
+		}
+		this._railScrollIndicatorUpdate = update;
 	}
 
 	_applyRailFilter() {
@@ -2249,6 +2314,11 @@ export class Viewer {
 		});
 		if (this.ui.railNoMatchEl) {
 			this.ui.railNoMatchEl.hidden = !(query && visible === 0);
+		}
+		// Refresh the sticky GTA-V scroll chevron since the rail's
+		// scrollHeight likely changed after hiding/showing rows.
+		if (this._railScrollIndicatorUpdate) {
+			requestAnimationFrame(this._railScrollIndicatorUpdate);
 		}
 	}
 

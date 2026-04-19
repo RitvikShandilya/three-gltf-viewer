@@ -234,6 +234,12 @@ class App {
 					// export flow can reuse it (with a .glb extension) when
 					// naming the downloaded file.
 					if (this.viewer) this.viewer._originalFilename = name;
+					// Update the pause-menu session chip (top-left brand area)
+					// with the loaded filename. The chip mirrors Grand-Figma-
+					// Kit's "Menu Badge" pattern, showing current context next
+					// to the brand title. Hidden when empty via CSS :empty.
+					const sessionEl = document.getElementById('pm-session');
+					if (sessionEl) sessionEl.textContent = name;
 					this.toast(`Loaded ${name}`, { level: 'success' });
 				}
 				cleanup();
@@ -270,7 +276,23 @@ class App {
 		const el = document.createElement('div');
 		el.className = `pm__toast pm__toast--${level}`;
 		el.setAttribute('role', level === 'error' ? 'alert' : 'status');
-		el.textContent = String(message == null ? '' : message);
+
+		// GTA V blip-style badge (Figma Grand-Kit, node 1201:5450). The
+		// tinted border/glow comes from --toast-accent via .pm__toast-icon.
+		const glyph = level === 'success' ? 'OK'
+			: level === 'error' ? '!'
+			: 'i';
+		const icon = document.createElement('span');
+		icon.className = 'pm__toast-icon';
+		icon.setAttribute('aria-hidden', 'true');
+		icon.textContent = glyph;
+
+		const text = document.createElement('span');
+		text.className = 'pm__toast-text';
+		text.textContent = String(message == null ? '' : message);
+
+		el.appendChild(icon);
+		el.appendChild(text);
 
 		const dismiss = () => {
 			if (el.dataset.dismissed === '1') return;

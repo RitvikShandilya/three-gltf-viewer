@@ -56,7 +56,13 @@
 	<section class="pm" aria-label="Settings Menu" aria-modal="false">
 		<div class="pm__backdrop" aria-hidden="true"></div>
 
-		<header class="pm__brand">GLTF VIEWER</header>
+		<header class="pm__brand">
+			<span class="pm__brand-title">GLTF VIEWER</span>
+			<!-- Session chip: generic context badge modeled on Figma's
+			     Menu Badge. Populated with the loaded glTF filename
+			     by app.js; falls back to empty (hidden) before load. -->
+			<span class="pm__session" id="pm-session" aria-live="polite"></span>
+		</header>
 
 		<header class="pm__topbar">
 			<nav class="pm__tabs" id="pm-tabs" role="tablist" aria-label="Menu sections"></nav>

@@ -1,23 +1,70 @@
 /* =============================================================
  * glTF Viewer — GTA V Pause Menu Revamp
- * Tokens drawn from the real HUD palette (altv.mp reference):
- * https://docs.altv.mp/gta/articles/references/hud-colors.html
+ *
+ * HUD palette sourced directly from Rockstar's "Grand Figma Kit"
+ * (Figma file: Pvqnhcfr9q1s0JffbFh6bU) by walking the `hud_color_*`
+ * variable defs attached to kit HUD primitives:
+ *   - Pause Map          1201:4255
+ *   - Interaction Menu   1201:3873
+ *   - Menu Screen        1201:4212
+ *   - Radar / Blips      1201:3664 / 1201:5450
+ *   - Status Bars        1201:5099
+ *   - Objectives         1201:5210
+ *   - Radio Wheel        1201:3617
+ *   - Lobby              1201:4043
+ *   - Ticker Boxes       1201:5233
+ *   - Golf Placards      1201:5359
+ * Each `--hud-color-*` token below carries a Figma-name comment so
+ * its source is traceable. Tokens not enumerated in the kit are
+ * cross-referenced against altv.mp's canonical HUD color docs.
  * ============================================================= */
 
 :root {
-	/* Palette */
+	/* -----------------------------------------------------------
+	 * Authoritative HUD color palette (Grand-Figma-Kit)
+	 * --------------------------------------------------------- */
+	--hud-color-pure-white:   #ffffff;                    /* Figma: HUD_COLOR_PURE_WHITE  — crosshair, highlights */
+	--hud-color-white:        #f0f0f0;                    /* Figma: HUD_COLOR_WHITE       — primary text, map keys */
+	--hud-color-black:        #000000;                    /* Figma: HUD_COLOR_BLACK       — text on light bg, blips */
+	--hud-color-grey:         #9b9b9b;                    /* Figma: HUD_COLOR_GREY        — notes, dim text */
+	--hud-color-yellow:       #f0c850;                    /* Figma: HUD_COLOR_YELLOW      — "NEW" badges, objectives */
+	--hud-color-red:          #e03232;                    /* Figma: HUD_COLOR_RED         — hostile / alert / low health */
+	--hud-color-red-light:    #f09999;                    /* Figma: HUD_COLOR_REDLIGHT    — red tint */
+	--hud-color-green:        #72cc72;                    /* Figma: HUD_COLOR_GREEN       — positive state */
+	--hud-color-blue:         #5db6e5;                    /* Figma: HUD_COLOR_BLUE        — UI accent */
+	--hud-color-blue-light:   #aedbf2;                    /* Figma: HUD_COLOR_BLUELIGHT   — blue tint */
+	--hud-color-friendly:     #5cb6e5;                    /* Figma: HUD_COLOR_FRIENDLY    — friendly blips */
+	--hud-color-franklin:     #abedab;                    /* Figma: HUD_COLOR_FRANKLIN    — Franklin character color */
+	--hud-color-trevor:       #ffa357;                    /* Figma: HUD_COLOR_TREVOR      — Trevor character color */
+	--hud-color-purple:       #8466e2;                    /* Figma: HUD_COLOR_PURPLE      — waypoint / online blip */
+	--hud-color-platinum:     #a6ddbe;                    /* Figma: HUD_COLOR_PLATINUM    — prestige */
+	--hud-color-gold:         #d6b563;                    /* Figma: HUD_COLOR_GOLD        — rank */
+	--hud-color-hostile:      #e03232;                    /* Figma alias: HUD_COLOR_RED is used for hostile in Alert Message (1201:4470) */
+	/* Michael is not enumerated as a named variable in the kit;
+	 * use Rockstar's canonical character hue from altv.mp docs so
+	 * the character-switch swatches behave consistently next to
+	 * the kit-defined FRANKLIN and TREVOR. */
+	--hud-color-michael:      #65B4D4;                    /* Reference: altv.mp HUD_COLOR_MICHAEL */
+
+	/* -----------------------------------------------------------
+	 * Semantic surfaces (derived from HUD palette)
+	 * --------------------------------------------------------- */
 	--bg:            rgba(0, 0, 0, 0.85);
-	--bg-solid:      #000000;
-	--text:          #F0F0F0;
-	--text-dim:      #8C8C8C;
+	--bg-solid:      var(--hud-color-black);              /* Figma: HUD_COLOR_BLACK */
+	/* Pause/overlay backdrop — from Figma `hud_color_pause_bg`
+	 * (#000000ba = rgba(0,0,0,0.73)) with the kit's 17.5px blur. */
+	--hud-pause-bg:  rgba(0, 0, 0, 0.73);                 /* Figma: HUD_COLOR_PAUSE_BG */
+	--hud-pause-blur: 17.5px;
+	--text:          var(--hud-color-white);              /* Figma: HUD_COLOR_WHITE */
+	--text-dim:      #8C8C8C;                             /* local dim tint (near HUD_COLOR_GREY #9b9b9b) */
 	--text-mute:     #646464;
 	--divider:       #5F5F5F;
-	--focus-bg:      #FFFFFF;
-	--focus-fg:      #000000;
+	--focus-bg:      var(--hud-color-pure-white);         /* Figma: HUD_COLOR_PURE_WHITE (selected row bg) */
+	--focus-fg:      var(--hud-color-black);              /* Figma: HUD_COLOR_BLACK (selected row text) */
 	--hover:         rgba(255, 255, 255, 0.15);
 
 	/* Accent (swappable via body[data-accent]) */
-	--accent:        #FCB131;                      /* SP amber */
+	--accent:        #FCB131;                             /* SP amber (brand, outside Figma kit) */
 	--accent-glow:   rgba(252, 177, 49, 0.4);
 
 	/* Typography */
@@ -25,13 +72,15 @@
 	--tracking:      0.10em;
 	--tracking-loose: 0.14em;
 
-	/* Scale */
-	--fs-title:      2.25rem;      /* 36px */
-	--fs-tab:        1.125rem;     /* 18px */
-	--fs-nav:        1.0625rem;    /* 17px */
-	--fs-row:        1rem;         /* 16px */
-	--fs-meta:       0.75rem;      /* 12px */
-	--fs-value:      1.125rem;     /* 18px */
+	/* Scale — ratios aligned to Grand-Figma-Kit (Rockstar Chalet @ 1920px canvas).
+	   Figma in-HUD px: row=21, meta/scale=20, prompt=24, tab=26, nameplate=44.
+	   We anchor row=16px and preserve relative ratios for our smaller viewport. */
+	--fs-title:      2rem;         /* 32px — ~2.0x row (Figma nameplate 44/21) */
+	--fs-tab:        1.25rem;      /* 20px — ~1.24x row (Figma tab 26/21)     */
+	--fs-nav:        1.25rem;      /* 20px — ~1.24x row (matches tab)         */
+	--fs-row:        1rem;         /* 16px — baseline anchor                   */
+	--fs-meta:       0.875rem;     /* 14px — ~0.95x row (Figma meta 20/21)    */
+	--fs-value:      1rem;         /* 16px — 1.00x row (Figma value == row)   */
 
 	/* Layout */
 	--rail-w:        288px;
@@ -45,10 +94,16 @@
 	--dur-snap:      80ms;
 }
 
-body[data-accent="amber"]    { --accent: #FCB131; --accent-glow: rgba(252,177,49,0.4); }
-body[data-accent="michael"]  { --accent: #65B4D4; --accent-glow: rgba(101,180,212,0.4); }
-body[data-accent="franklin"] { --accent: #ABEDAB; --accent-glow: rgba(171,237,171,0.4); }
-body[data-accent="trevor"]   { --accent: #FFA357; --accent-glow: rgba(255,163,87,0.4); }
+/* Character-accent overrides route through the authoritative HUD
+ * palette (see :root above) so the app and Figma stay in lockstep.
+ * Hex sources — Figma variable defs on Pvqnhcfr9q1s0JffbFh6bU:
+ *   franklin → HUD_COLOR_FRANKLIN (#abedab)  — Pause Map 1201:4255
+ *   trevor   → HUD_COLOR_TREVOR   (#ffa357)  — Radar 1201:3664
+ *   michael  → altv.mp reference   (#65B4D4)  — not enumerated in the kit  */
+body[data-accent="amber"]    { --accent: #FCB131;                    --accent-glow: rgba(252,177,49,0.4); }
+body[data-accent="michael"]  { --accent: var(--hud-color-michael);   --accent-glow: rgba(101,180,212,0.4); }
+body[data-accent="franklin"] { --accent: var(--hud-color-franklin);  --accent-glow: rgba(171,237,171,0.4); }
+body[data-accent="trevor"]   { --accent: var(--hud-color-trevor);    --accent-glow: rgba(255,163,87,0.4); }
 
 * { box-sizing: border-box; }
 
@@ -345,13 +400,18 @@ body:not(.has-model) .pm__toggle {
 }
 
 /* Full-screen backdrop: desaturate, blur, and darken the 3D viewport
- * behind the menu. Matches the GTA V pause-menu's full-overlay feel. */
+ * behind the menu. Matches the GTA V pause-menu's full-overlay feel.
+ *
+ * Alpha + blur are taken directly from Grand-Figma-Kit (Menu Screen /
+ * Pause Map): `--hud_color_pause_bg = rgba(0,0,0,0.73)` over a 17.5px
+ * backdrop blur. Grayscale is retained so the underlying 3D scene reads
+ * as a muted backdrop rather than a crisp image behind the chrome. */
 .pm__backdrop {
 	position: absolute;
 	inset: 0;
-	background: var(--bg);
-	backdrop-filter: grayscale(1) blur(6px) brightness(0.35);
-	-webkit-backdrop-filter: grayscale(1) blur(6px) brightness(0.35);
+	background: var(--hud-pause-bg);
+	backdrop-filter: grayscale(1) blur(var(--hud-pause-blur));
+	-webkit-backdrop-filter: grayscale(1) blur(var(--hud-pause-blur));
 	z-index: 0;
 	pointer-events: none;
 }
@@ -368,13 +428,19 @@ body:not(.has-model) .pm__toggle {
 /* =============================================================
  * Brand title (GTA V-style "Grand Theft Auto Online" header)
  * Sits above the tab bar, full width of the overlay.
+ *
+ * The layout mirrors Grand-Figma-Kit's Menu Screen pattern where a
+ * top-left anchor (tab selector + session context) introduces the
+ * screen — we use the brand as the screen anchor and drop a compact
+ * "session chip" to its right to communicate *what* is currently
+ * loaded (e.g. a glTF filename) without leaving the chrome.
  * ============================================================= */
 .pm__brand {
 	height: 64px;
-	padding: 0 48px;
+	padding: 0 48px 12px;
 	display: flex;
 	align-items: flex-end;
-	padding-bottom: 12px;
+	gap: 16px;
 	font-family: var(--font);
 	font-weight: 300;
 	font-size: 2.25rem;
@@ -382,6 +448,42 @@ body:not(.has-model) .pm__toggle {
 	text-transform: uppercase;
 	color: #F0F0F0;
 }
+
+/* The brand label collapses to content width so the session chip can
+ * sit flush after the title baseline. */
+.pm__brand-title {
+	flex: 0 0 auto;
+	line-height: 1;
+}
+
+/* Session chip — generic context pill modeled on Figma's "Menu Badge"
+ * (rounded-[6px], px-[8px] py-[5px], filled pill with uppercase text).
+ * Here it signals the currently-loaded glTF filename (or "VIEWER" when
+ * empty) alongside the brand title. Hidden entirely if the chip has no
+ * textContent so it doesn't render as a bare empty frame. */
+.pm__session {
+	flex: 0 0 auto;
+	display: inline-flex;
+	align-items: center;
+	height: 26px;
+	padding: 0 10px;
+	margin-bottom: 2px;
+	background: rgba(255, 255, 255, 0.08);
+	border: 1px solid color-mix(in srgb, var(--accent) 55%, var(--divider));
+	border-radius: 6px;
+	font-family: var(--font);
+	font-weight: 500;
+	font-size: 0.8125rem;
+	letter-spacing: var(--tracking-loose);
+	text-transform: uppercase;
+	color: var(--accent);
+	max-width: 40ch;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.pm__session:empty { display: none; }
 
 /* =============================================================
  * Top tab bar
@@ -516,10 +618,11 @@ body:not(.has-model) .pm__toggle {
 .pm__swatch:hover { transform: scale(1.2); }
 .pm__swatch[aria-checked="true"] { border-color: var(--text); transform: scale(1.15); }
 
+/* Swatches reference the same tokens as body[data-accent]. */
 .pm__swatch[data-accent="amber"]    { background: #FCB131; }
-.pm__swatch[data-accent="michael"]  { background: #65B4D4; }
-.pm__swatch[data-accent="franklin"] { background: #ABEDAB; }
-.pm__swatch[data-accent="trevor"]   { background: #FFA357; }
+.pm__swatch[data-accent="michael"]  { background: var(--hud-color-michael); }
+.pm__swatch[data-accent="franklin"] { background: var(--hud-color-franklin); }
+.pm__swatch[data-accent="trevor"]   { background: var(--hud-color-trevor); }
 
 /* =============================================================
  * Body: rail + pane
@@ -539,6 +642,40 @@ body:not(.has-model) .pm__toggle {
 	scrollbar-width: none;
 }
 .pm__rail::-webkit-scrollbar { display: none; }
+
+/* GTA V "Scroll Indicator" row: shown at the bottom of the rail when
+ * content overflows. Figma node 1201:4554 — rgba(0,0,0,0.8) backdrop
+ * with a small down-chevron centered. Pulses softly to draw the eye. */
+.pm__rail-scroll-indicator {
+	position: sticky;
+	bottom: 0;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	height: 28px;
+	margin: 0;
+	background: rgba(0, 0, 0, 0.8);
+	color: var(--text);
+	font-size: 12px;
+	line-height: 1;
+	pointer-events: none;
+	user-select: none;
+	opacity: 0;
+	transition: opacity 160ms var(--ease-gta);
+	z-index: 1;
+}
+.pm__rail-scroll-indicator[data-visible="true"] {
+	opacity: 1;
+	animation: pm-scroll-pulse 1.6s var(--ease-gta) infinite;
+}
+.pm__rail-scroll-indicator-chevron {
+	display: inline-block;
+	transform: translateY(1px);
+}
+@keyframes pm-scroll-pulse {
+	0%, 100% { opacity: 0.55; }
+	50%      { opacity: 1; }
+}
 
 .pm__rail-title {
 	padding: 0 32px 16px;
@@ -594,6 +731,7 @@ body:not(.has-model) .pm__toggle {
 	display: flex;
 	align-items: center;
 	justify-content: space-between;
+	/* Figma spec: 38px row height; GTA V Interaction Menu uses tight vertical rhythm */
 	height: var(--row-h);
 	padding: 0 32px;
 	font-size: var(--fs-nav);
@@ -602,8 +740,9 @@ body:not(.has-model) .pm__toggle {
 	text-transform: uppercase;
 	color: var(--text-dim);
 	cursor: pointer;
-	background: transparent;
+	background: rgba(217, 217, 217, 0); /* Figma: rgba(217,217,217,0) translucent default */
 	border: 0;
+	/* 1px gap between rows mirrors the Figma flex gap (gap-px) */
 	border-bottom: 1px solid transparent;
 	width: 100%;
 	text-align: left;
@@ -637,10 +776,59 @@ body:not(.has-model) .pm__toggle {
 	color: var(--text);
 }
 
+/* Figma spec: focused row is a white → #d1d0cf gradient with black text.
+ * We keep the amber accent marker on the left via ::before for
+ * GTA V SP styling continuity; pane theming still respects --focus-bg/--focus-fg. */
 .pm__row[aria-selected="true"] {
-	background: var(--focus-bg);
+	background: linear-gradient(90deg, var(--focus-bg) 0%, #d1d0cf 100%);
 	color: var(--focus-fg);
 }
+
+/* Inline horizontal-selector arrows (◀ ▶) — only rendered on the
+ * focused row for enum/num types. Figma: 10px gap between arrow and
+ * value, arrows on either side of the value text. */
+.pm__row-inline-arrows {
+	display: inline-flex;
+	align-items: center;
+	gap: 10px;
+	font-weight: 400;
+	color: inherit;
+}
+.pm__row-inline-arrow {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 10.66px;
+	line-height: 1;
+	font-size: 0.9em;
+	opacity: 0.9;
+	color: inherit;
+	user-select: none;
+	pointer-events: none;
+}
+.pm__row:not([aria-selected="true"]) .pm__row-inline-arrows .pm__row-inline-arrow {
+	/* Spec: inline arrows only appear on the focused row. */
+	display: none;
+}
+
+/* GTA V toggle checkbox glyph — Figma uses PUA E941.
+ * We render a Unicode checkmark framed in a 1px box so it reads as a
+ * toggle. Inverts foreground on focused (selected) rows automatically
+ * because it inherits `color` from the row. */
+.pm__row-toggle {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 18px;
+	height: 18px;
+	border: 1px solid currentColor;
+	font-size: 12px;
+	line-height: 1;
+	color: inherit;
+	transition: color var(--dur-snap) linear, border-color var(--dur-snap) linear;
+}
+.pm__row-toggle[data-on="false"] .pm__row-toggle-glyph { opacity: 0; }
+.pm__row-toggle-glyph { display: block; }
 
 /* Value-change flash on slider/toggle update */
 .pm__row-value--flash {
@@ -2026,6 +2214,8 @@ html, body { max-width: 100vw; overflow-x: hidden; }
 		--rail-w: 200px;
 		--fs-title: 1.75rem;
 	}
+	.pm__brand { padding: 0 20px 10px; gap: 10px; font-size: 1.5rem; height: 56px; }
+	.pm__session { max-width: 22ch; font-size: 0.75rem; }
 	.pm__topbar { padding: 0 20px; }
 	.pm__tabs { gap: 20px; }
 	.pm__meta { gap: 14px; }
@@ -2198,6 +2388,8 @@ html, body { max-width: 100vw; overflow-x: hidden; }
  * ============================================================ */
 @media (max-width: 600px) {
 	:root { --rail-w: 100%; --tabbar-h: 48px; }
+	.pm__brand { padding: 0 14px 8px; height: 48px; font-size: 1.25rem; }
+	.pm__session { max-width: 16ch; font-size: 0.6875rem; padding: 0 8px; height: 22px; }
 	.pm__tab { font-size: 0.9rem; }
 	.pm__row { padding: 0 16px; font-size: 0.9375rem; min-height: 44px; height: auto; }
 	.pm__pane { padding: 16px 14px; }
@@ -3546,4 +3738,143 @@ html, body { max-width: 100vw; overflow-x: hidden; }
 		flex-wrap: wrap;
 		min-width: 0;
 	}
+}
+
+/* =============================================================
+ * Figma-ported icon & badge treatments
+ * Source: Grand-Figma-Kit (Pvqnhcfr9q1s0JffbFh6bU)
+ *   - Radio Wheel selected chip (1201:3623): thick white inner ring +
+ *     subtle outer glow around the active 32px media chip while
+ *     unselected chips drop to ~50% opacity.
+ *   - Blip (1201:5450 / instance 1201:4278): compact 32px objective
+ *     marker — flat, hairline-bordered rounded square, color-tinted.
+ *
+ * We port only the visual primitives (halo, inner ring, outer glow,
+ * hairline-bordered badge) — NOT the radio wheel itself.
+ * ============================================================= */
+
+/* ----- Rail-row camera-preset icon: subtle rounded halo on focus ----- */
+.pm__row-icon {
+	border-radius: 6px;
+	transition:
+		color var(--dur-snap) linear,
+		background-color var(--dur-snap) linear,
+		box-shadow var(--dur-snap) linear;
+}
+.pm__row:hover .pm__row-icon,
+.pm__row:focus-visible .pm__row-icon {
+	background: var(--accent-glow);
+	box-shadow:
+		inset 0 0 0 1px var(--accent),
+		0 0 8px var(--accent-glow);
+}
+.pm__row[aria-selected="true"] .pm__row-icon {
+	background: rgba(0, 0, 0, 0.12);
+	box-shadow:
+		inset 0 0 0 1px rgba(0, 0, 0, 0.4),
+		0 0 0 2px rgba(255, 255, 255, 0.2);
+}
+
+/* Big preview icon (right pane) — full selected-chip treatment on hover. */
+.pm__icon-preview {
+	border-radius: 8px;
+	box-shadow:
+		inset 0 0 0 1px rgba(255, 255, 255, 0.06),
+		0 0 0 0 transparent;
+	transition:
+		box-shadow var(--dur-cross) var(--ease-gta),
+		background-color var(--dur-cross) var(--ease-gta);
+}
+.pm__icon-preview:hover {
+	background: color-mix(in srgb, var(--accent) 12%, transparent);
+	box-shadow:
+		inset 0 0 0 1px var(--accent),
+		0 0 18px var(--accent-glow);
+}
+
+/* ----- Accent swatches: radio-wheel selected-chip treatment -----
+ * Thin white inner ring + outer accent glow on the active swatch,
+ * unselected swatches dim to 0.7 opacity like the Figma wheel. */
+.pm__swatch {
+	opacity: 0.7;
+	box-shadow: 0 0 0 0 transparent;
+	transition:
+		transform 120ms var(--ease-gta),
+		border-color 120ms linear,
+		opacity 120ms linear,
+		box-shadow 160ms var(--ease-gta);
+}
+.pm__swatch:hover { opacity: 1; }
+.pm__swatch[aria-checked="true"] {
+	opacity: 1;
+	box-shadow:
+		inset 0 0 0 2px #FFFFFF,
+		0 0 0 1px rgba(0, 0, 0, 0.6),
+		0 0 12px var(--accent-glow),
+		0 0 24px var(--accent-glow);
+}
+
+/* ----- Toast icon badge: GTA-style blip chip -----
+ * Populated by src/app.js toast() as .pm__toast-icon / .pm__toast-text.
+ * Mimics the 32px Figma Blip: rounded-square, hairline border tinted
+ * to the toast's --toast-accent, color-tinted fill. */
+.pm__toast {
+	display: flex;
+	align-items: flex-start;
+	gap: 10px;
+}
+.pm__toast-icon {
+	flex: 0 0 auto;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 22px;
+	height: 22px;
+	margin-top: 1px;
+	border-radius: 5px;
+	border: 1px solid var(--toast-accent, var(--accent));
+	background: color-mix(in srgb, var(--toast-accent, var(--accent)) 20%, transparent);
+	color: var(--toast-accent, var(--accent));
+	font-family: var(--font, 'Barlow Condensed', Impact, sans-serif);
+	font-weight: 700;
+	font-size: 0.75rem;
+	line-height: 1;
+	letter-spacing: 0;
+	box-shadow:
+		inset 0 0 0 1px rgba(0, 0, 0, 0.35),
+		0 0 8px color-mix(in srgb, var(--toast-accent, var(--accent)) 40%, transparent);
+	text-transform: none;
+	user-select: none;
+}
+.pm__toast-icon svg {
+	width: 12px;
+	height: 12px;
+	display: block;
+	fill: currentColor;
+	stroke: currentColor;
+}
+.pm__toast-text {
+	flex: 1 1 auto;
+	min-width: 0;
+}
+
+/* "FIX ISSUES" / "DOWNLOAD FIXED GLB" pills: small blip-style dot before
+ * the label so they visually pair with toast badges. */
+.report-toggle-fix::before {
+	content: '';
+	display: inline-block;
+	width: 6px;
+	height: 6px;
+	margin-right: 6px;
+	border-radius: 2px;
+	background: currentColor;
+	box-shadow: 0 0 6px currentColor;
+	vertical-align: 1px;
+	opacity: 0.9;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.pm__row-icon,
+	.pm__icon-preview,
+	.pm__swatch { transition: none; }
 }
