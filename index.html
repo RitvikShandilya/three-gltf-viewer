@@ -1,8 +1,9 @@
 <!doctype html>
+<html lang="en">
 <head>
 	<meta charset="utf-8" />
 	<meta http-equiv="X-UA-Compatible" content="IE=edge" />
-	<title>glTF Viewer</title>
+	<title>glTF Viewer · Pause Menu</title>
 	<meta
 		name="viewport"
 		content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"
@@ -11,36 +12,115 @@
 	<meta name="description" content="Drag-and-drop preview tool for glTF 2.0 3D models." />
 	<link rel="canonical" href="https://gltf-viewer.donmccurdy.com/" />
 	<link rel="shortcut icon" href="/favicon.ico" />
+	<link rel="preconnect" href="https://fonts.googleapis.com" />
+	<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+	<link
+		href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@300;400;500;600&display=swap"
+		rel="stylesheet"
+	/>
 	<link rel="stylesheet" href="style.css" />
-	<link href="https://fonts.googleapis.com/css?family=Raleway:300,400" rel="stylesheet" />
 	<script defer type="module" src="src/app.js"></script>
 </head>
-<body>
-	<header>
-		<h1><a href="/">glTF Viewer</a></h1>
-	</header>
+<body data-accent="amber" data-menu-open="false">
+	<!-- 3D viewport layer -->
 	<main class="wrap">
 		<div class="dropzone">
-			<div class="placeholder">
-				<p>Drag glTF 2.0 file or folder here</p>
+			<div class="dropzone__halftone" aria-hidden="true"></div>
+			<div class="dropzone__vignette" aria-hidden="true"></div>
+
+			<header class="dropzone__header">
+				<h1 class="dropzone__title">
+					<span class="dropzone__title-text">GLTF VIEWER // REMASTERED</span>
+					<span class="dropzone__scanline" aria-hidden="true"></span>
+				</h1>
+				<p class="dropzone__sub">LOAD ASSET</p>
+			</header>
+
+			<div class="placeholder dropzone__target" role="group" aria-label="Drop target">
+				<span class="dropzone__bracket dropzone__bracket--tl" aria-hidden="true"></span>
+				<span class="dropzone__bracket dropzone__bracket--tr" aria-hidden="true"></span>
+				<span class="dropzone__bracket dropzone__bracket--bl" aria-hidden="true"></span>
+				<span class="dropzone__bracket dropzone__bracket--br" aria-hidden="true"></span>
+
+				<svg class="dropzone__glyph" viewBox="0 0 64 64" aria-hidden="true" focusable="false">
+					<circle cx="32" cy="32" r="28" fill="none" stroke="currentColor" stroke-width="1.2" stroke-dasharray="3 4" opacity="0.6" />
+					<path d="M32 44 L32 20 M22 30 L32 20 L42 30" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square" stroke-linejoin="miter" />
+					<line x1="20" y1="48" x2="44" y2="48" stroke="currentColor" stroke-width="2" stroke-linecap="square" />
+				</svg>
+
+				<p>DRAG GLTF 2.0 FILE OR FOLDER</p>
+				<div class="upload-btn">
+					<input type="file" name="file-input[]" id="file-input" multiple />
+					<label for="file-input"><span>CHOOSE FILE</span></label>
+				</div>
 			</div>
-			<div class="upload-btn">
-				<input type="file" name="file-input[]" id="file-input" multiple="" />
-				<label for="file-input">
-					<svg
-						xmlns="http://www.w3.org/2000/svg"
-						width="20"
-						height="17"
-						viewBox="0 0 20 17"
-					>
-						<path
-							d="M10 0l-5.2 4.9h3.3v5.1h3.8v-5.1h3.3l-5.2-4.9zm9.3 11.5l-3.2-2.1h-2l3.4 2.6h-3.5c-.1 0-.2.1-.2.1l-.8 2.3h-6l-.8-2.2c-.1-.1-.1-.2-.2-.2h-3.6l3.4-2.6h-2l-3.2 2.1c-.4.3-.7 1-.6 1.5l.6 3.1c.1.5.7.9 1.2.9h16.3c.6 0 1.1-.4 1.3-.9l.6-3.1c.1-.5-.2-1.2-.7-1.5z"
-						></path>
-					</svg>
-					<span>Choose file</span>
-				</label>
-			</div>
+
+			<footer class="dropzone__footer">
+				<span class="dropzone__hint">SUPPORTS .GLTF / .GLB / ZIP</span>
+				<span class="dropzone__hint dropzone__hint--brand">MISSION READY</span>
+			</footer>
 		</div>
 		<div class="spinner"></div>
 	</main>
+
+	<!-- Pause menu overlay (fills screen on top of viewer) -->
+	<section class="pm" aria-label="Settings Menu" aria-modal="false">
+		<div class="pm__backdrop" aria-hidden="true"></div>
+		<svg class="pm__grain" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
+			<filter id="pm-noise">
+				<feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="2" stitchTiles="stitch" />
+				<feColorMatrix values="0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 .08 0" />
+			</filter>
+			<rect width="100%" height="100%" filter="url(#pm-noise)" />
+		</svg>
+		<div class="pm__vignette" aria-hidden="true"></div>
+
+		<header class="pm__topbar">
+			<nav class="pm__tabs" id="pm-tabs" role="tablist" aria-label="Menu sections"></nav>
+			<div class="pm__meta">
+				<div class="pm__swatches" role="radiogroup" aria-label="Accent color">
+					<button class="pm__swatch" data-accent="amber" aria-label="Amber"></button>
+					<button class="pm__swatch" data-accent="michael" aria-label="Michael"></button>
+					<button class="pm__swatch" data-accent="franklin" aria-label="Franklin"></button>
+					<button class="pm__swatch" data-accent="trevor" aria-label="Trevor"></button>
+				</div>
+				<div class="pm__meta-stack">
+					<span class="pm__meta-label">FPS</span>
+					<span class="pm__meta-value" id="pm-fps">—</span>
+				</div>
+				<div class="pm__meta-stack">
+					<span class="pm__meta-label">TRIS</span>
+					<span class="pm__meta-value" id="pm-tris">—</span>
+				</div>
+				<div class="pm__meta-stack">
+					<span class="pm__meta-label">CALLS</span>
+					<span class="pm__meta-value" id="pm-calls">—</span>
+				</div>
+			</div>
+		</header>
+
+		<div class="pm__body">
+			<aside class="pm__rail" id="pm-rail" role="tablist" aria-label="Settings"></aside>
+			<main class="pm__pane" id="pm-pane" role="tabpanel"></main>
+		</div>
+
+		<footer class="pm__footer">
+			<span class="pm__hint"><kbd>↑↓</kbd> NAVIGATE</span>
+			<span class="pm__hint"><kbd>←→</kbd> CHANGE</span>
+			<span class="pm__hint"><kbd>TAB</kbd> SECTION</span>
+			<span class="pm__hint"><kbd>/</kbd> SEARCH</span>
+			<span class="pm__hint"><kbd>ESC</kbd> TOGGLE</span>
+			<span class="pm__spacer"></span>
+			<button class="pm__share" id="pm-share" type="button" aria-label="Copy shareable link to clipboard">COPY LINK</button>
+			<span class="pm__hint pm__hint--brand">GLTF VIEWER // REMASTERED</span>
+		</footer>
+	</section>
+
+	<button class="pm__toggle" id="pm-toggle" aria-label="Open settings menu">
+		<span>PAUSE</span>
+	</button>
+
+	<!-- Toast notifications container (for errors/status) -->
+	<div class="pm__toasts" id="pm-toasts" aria-live="polite" aria-atomic="true"></div>
 </body>
+</html>
