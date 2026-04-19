@@ -3280,9 +3280,158 @@ export class Viewer {
 			showCenter: true,
 			showCamMarker: true,
 		});
-		wrap.appendChild(svg);
+
+		// Figma "Map Key" + "Scale" overlays: a stacked legend in the top-right
+		// and a scale bar + location pill in the bottom-left of the schematic.
+		// Wrap the SVG so absolute overlays can align to its edges.
+		const stage = document.createElement('div');
+		stage.className = 'pm__map-stage';
+		stage.appendChild(svg);
+		stage.appendChild(this._buildMapLegend());
+		stage.appendChild(this._buildMapScale(geom));
+		wrap.appendChild(stage);
+
 		wrap.appendChild(this._buildMapStats(geom, 'all'));
 		startTicker();
+	}
+
+	/**
+	 * Figma "Map Key" — stacked rows in the top-right of the schematic.
+	 * Inactive rows are dark translucent with white Barlow Condensed labels;
+	 * the selected row ("CAMERA") inverts to white bg + black text.
+	 */
+	_buildMapLegend() {
+		const legend = document.createElement('div');
+		legend.className = 'pm__map-legend-panel';
+		legend.setAttribute('role', 'list');
+		legend.setAttribute('aria-label', 'Map key');
+
+		const items = [
+			{ key: 'camera', label: 'CAMERA', icon: 'cam', active: true },
+			{ key: 'origin', label: 'ORIGIN', icon: 'origin', active: false },
+			{ key: 'bounds', label: 'BOUNDS', icon: 'bounds', active: false },
+			{ key: 'target', label: 'TARGET', icon: 'target', active: false },
+		];
+
+		items.forEach((item) => {
+			const row = document.createElement('div');
+			row.className = 'pm__map-legend-row' + (item.active ? ' pm__map-legend-row--active' : '');
+			row.setAttribute('role', 'listitem');
+			row.dataset.key = item.key;
+
+			const iconWrap = document.createElement('span');
+			iconWrap.className = 'pm__map-legend-icon pm__map-legend-icon--' + item.icon;
+			iconWrap.setAttribute('aria-hidden', 'true');
+
+			// Inline SVG glyphs matching Figma: amber circle (CAMERA),
+			// white dot (ORIGIN), amber outline square (BOUNDS), crosshair (TARGET).
+			const svgNS = 'http://www.w3.org/2000/svg';
+			const ig = document.createElementNS(svgNS, 'svg');
+			ig.setAttribute('viewBox', '0 0 16 16');
+			ig.setAttribute('width', '16');
+			ig.setAttribute('height', '16');
+			ig.setAttribute('aria-hidden', 'true');
+			ig.setAttribute('focusable', 'false');
+
+			if (item.icon === 'cam') {
+				const c = document.createElementNS(svgNS, 'circle');
+				c.setAttribute('cx', '8');
+				c.setAttribute('cy', '8');
+				c.setAttribute('r', '5.5');
+				c.setAttribute('fill', '#FCB131');
+				ig.appendChild(c);
+			} else if (item.icon === 'origin') {
+				const c = document.createElementNS(svgNS, 'circle');
+				c.setAttribute('cx', '8');
+				c.setAttribute('cy', '8');
+				c.setAttribute('r', '3.5');
+				c.setAttribute('fill', '#FFFFFF');
+				ig.appendChild(c);
+			} else if (item.icon === 'bounds') {
+				const r = document.createElementNS(svgNS, 'rect');
+				r.setAttribute('x', '2.5');
+				r.setAttribute('y', '2.5');
+				r.setAttribute('width', '11');
+				r.setAttribute('height', '11');
+				r.setAttribute('fill', 'none');
+				r.setAttribute('stroke', '#FCB131');
+				r.setAttribute('stroke-width', '1.5');
+				ig.appendChild(r);
+			} else if (item.icon === 'target') {
+				const mk = (x1, y1, x2, y2) => {
+					const l = document.createElementNS(svgNS, 'line');
+					l.setAttribute('x1', x1);
+					l.setAttribute('y1', y1);
+					l.setAttribute('x2', x2);
+					l.setAttribute('y2', y2);
+					l.setAttribute('stroke', 'currentColor');
+					l.setAttribute('stroke-width', '1.5');
+					l.setAttribute('stroke-linecap', 'square');
+					ig.appendChild(l);
+				};
+				mk(8, 1, 8, 6);
+				mk(8, 10, 8, 15);
+				mk(1, 8, 6, 8);
+				mk(10, 8, 15, 8);
+				const c = document.createElementNS(svgNS, 'circle');
+				c.setAttribute('cx', '8');
+				c.setAttribute('cy', '8');
+				c.setAttribute('r', '1.5');
+				c.setAttribute('fill', 'currentColor');
+				ig.appendChild(c);
+			}
+			iconWrap.appendChild(ig);
+
+			const label = document.createElement('span');
+			label.className = 'pm__map-legend-label';
+			label.textContent = item.label;
+
+			row.appendChild(iconWrap);
+			row.appendChild(label);
+			legend.appendChild(row);
+		});
+
+		return legend;
+	}
+
+	/**
+	 * Figma "Scale" — a horizontal "0 — <size>" bar above a location pill
+	 * showing the model name (fallback "SCENE"). Both sit bottom-left of
+	 * the map SVG. Scale uses the model's longest axis as the distance.
+	 */
+	_buildMapScale(geom) {
+		const scale = document.createElement('div');
+		scale.className = 'pm__map-scale';
+
+		const { hasModel, size } = geom;
+		const longest = hasModel ? Math.max(size.x, size.y, size.z, 1e-6) : 0;
+		const sizeText = hasModel ? this._fmtMap(longest) : '—';
+
+		const bar = document.createElement('div');
+		bar.className = 'pm__map-scale-bar';
+		bar.innerHTML =
+			'<span class="pm__map-scale-endcap"></span>' +
+			'<span class="pm__map-scale-track"></span>' +
+			'<span class="pm__map-scale-endcap"></span>';
+
+		const labels = document.createElement('div');
+		labels.className = 'pm__map-scale-labels';
+		labels.innerHTML =
+			'<span class="pm__map-scale-label">0</span>' +
+			'<span class="pm__map-scale-label pm__map-scale-label--end"></span>';
+		labels.querySelector('.pm__map-scale-label--end').textContent = sizeText;
+
+		const pill = document.createElement('div');
+		pill.className = 'pm__map-scale-pill';
+		const rawName =
+			(this._originalFilename && String(this._originalFilename).replace(/\.(gltf|glb)$/i, '')) ||
+			'scene';
+		pill.textContent = String(rawName).toUpperCase() || 'SCENE';
+
+		scale.appendChild(bar);
+		scale.appendChild(labels);
+		scale.appendChild(pill);
+		return scale;
 	}
 
 	_renderMapDimensions(wrap, geom) {
