@@ -65,18 +65,6 @@
 					<button class="pm__swatch" data-accent="franklin" aria-label="Franklin green accent" title="Franklin Green"></button>
 					<button class="pm__swatch" data-accent="trevor" aria-label="Trevor orange accent" title="Trevor Orange"></button>
 				</div>
-				<div class="pm__meta-stack">
-					<span class="pm__meta-label">FPS</span>
-					<span class="pm__meta-value" id="pm-fps">—</span>
-				</div>
-				<div class="pm__meta-stack">
-					<span class="pm__meta-label">TRIS</span>
-					<span class="pm__meta-value" id="pm-tris">—</span>
-				</div>
-				<div class="pm__meta-stack">
-					<span class="pm__meta-label">CALLS</span>
-					<span class="pm__meta-value" id="pm-calls">—</span>
-				</div>
 			</div>
 		</header>
 
@@ -93,6 +81,9 @@
 			<button class="pm__share" id="pm-share" type="button" aria-label="Copy shareable link to clipboard">Copy link</button>
 		</footer>
 	</section>
+
+	<!-- Top-right control cluster: HUD sits to the LEFT of the MENU button -->
+	<div class="hud" id="hud" role="group" aria-label="Performance HUD" aria-hidden="true" hidden></div>
 
 	<button class="pm__toggle" id="pm-toggle" aria-label="Open settings menu">
 		<span>Menu</span>

@@ -22,6 +22,7 @@ import {
 	Scene,
 	SkeletonHelper,
 	SRGBColorSpace,
+	Vector2,
 	Vector3,
 	WebGLRenderer,
 	LinearToneMapping,
@@ -36,6 +37,12 @@ import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { EXRLoader } from 'three/addons/loaders/EXRLoader.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { SSAOPass } from 'three/addons/postprocessing/SSAOPass.js';
+import { FilmPass } from 'three/addons/postprocessing/FilmPass.js';
 
 import { environments } from './environments.js';
 
@@ -94,6 +101,16 @@ export class Viewer {
 			bgColor: '#0a0a0a',
 
 			pointSize: 1.0,
+
+			// Post-processing
+			bloom: false,
+			bloomStrength: 0.5,
+			bloomThreshold: 0.85,
+			bloomRadius: 0.4,
+			ssao: false,
+			ssaoStrength: 1.0,
+			filmGrain: false,
+			filmGrainIntensity: 0.35,
 		};
 
 		// Snapshot original defaults for per-tab RESET chips.
@@ -133,6 +150,10 @@ export class Viewer {
 
 		this.el.appendChild(this.renderer.domElement);
 
+		// Post-processing pipeline. Lazily activated; when all post-fx are off,
+		// render() bypasses the composer and uses the raw WebGLRenderer path.
+		this._setupPostProcessing(el.clientWidth, el.clientHeight);
+
 		this.skeletonHelpers = [];
 		this.gridHelper = null;
 		this.axesHelper = null;
@@ -146,6 +167,9 @@ export class Viewer {
 		this._applyStateFromUrl();
 
 		this.addGUI();
+
+		// Push any URL-restored post-fx values into the pass objects.
+		this._updatePostProcessing();
 
 		this.animate = this.animate.bind(this);
 		requestAnimationFrame(this.animate);
@@ -181,7 +205,22 @@ export class Viewer {
 	}
 
 	render() {
-		this.renderer.render(this.scene, this.activeCamera);
+		// Keep RenderPass synced with the currently active camera — it may have
+		// been swapped via setCamera() when switching between the default camera
+		// and a camera embedded in the loaded glTF.
+		if (this.renderPass && this.renderPass.camera !== this.activeCamera) {
+			this.renderPass.camera = this.activeCamera;
+		}
+		if (this.ssaoPass && this.ssaoPass.camera !== this.activeCamera) {
+			this.ssaoPass.camera = this.activeCamera;
+		}
+
+		if (this._isPostFXEnabled()) {
+			this.composer.render();
+		} else {
+			this.renderer.render(this.scene, this.activeCamera);
+		}
+
 		if (this.state.grid) {
 			this.axesCamera.position.copy(this.defaultCamera.position);
 			this.axesCamera.lookAt(this.axesScene.position);
@@ -196,9 +235,94 @@ export class Viewer {
 		this.defaultCamera.updateProjectionMatrix();
 		this.renderer.setSize(clientWidth, clientHeight);
 
+		if (this.composer) {
+			this.composer.setSize(clientWidth, clientHeight);
+		}
+		if (this.bloomPass) {
+			this.bloomPass.setSize(clientWidth, clientHeight);
+		}
+		if (this.ssaoPass) {
+			this.ssaoPass.setSize(clientWidth, clientHeight);
+		}
+
 		this.axesCamera.aspect = this.axesDiv.clientWidth / this.axesDiv.clientHeight;
 		this.axesCamera.updateProjectionMatrix();
 		this.axesRenderer.setSize(this.axesDiv.clientWidth, this.axesDiv.clientHeight);
+	}
+
+	/**
+	 * Build the EffectComposer and post-processing passes up front so we can
+	 * toggle them on/off cheaply via state. Passes are all disabled by default
+	 * so render() bypasses the composer entirely until the user opts in.
+	 */
+	_setupPostProcessing(width, height) {
+		this.composer = new EffectComposer(this.renderer);
+		this.composer.setPixelRatio(window.devicePixelRatio);
+		this.composer.setSize(width, height);
+
+		this.renderPass = new RenderPass(this.scene, this.activeCamera);
+		this.composer.addPass(this.renderPass);
+
+		// SSAO goes before bloom so bloom blooms the AO-darkened image, not
+		// the other way around. Disabled by default.
+		this.ssaoPass = new SSAOPass(this.scene, this.activeCamera, width, height);
+		this.ssaoPass.kernelRadius = 8;
+		this.ssaoPass.minDistance = 0.001;
+		this.ssaoPass.maxDistance = 0.1;
+		this.ssaoPass.enabled = false;
+		this.composer.addPass(this.ssaoPass);
+
+		this.bloomPass = new UnrealBloomPass(
+			new Vector2(width, height),
+			this.state.bloomStrength,
+			this.state.bloomRadius,
+			this.state.bloomThreshold,
+		);
+		this.bloomPass.enabled = false;
+		this.composer.addPass(this.bloomPass);
+
+		// FilmPass: noise + scanlines. We only use the noise (grayscale) channel
+		// here; scanlines off. Disabled by default.
+		this.filmPass = new FilmPass(this.state.filmGrainIntensity, false);
+		this.filmPass.enabled = false;
+		this.composer.addPass(this.filmPass);
+
+		// OutputPass handles tone mapping + sRGB conversion correctly when the
+		// composer is active (matches the direct renderer.render() path).
+		this.outputPass = new OutputPass();
+		this.composer.addPass(this.outputPass);
+	}
+
+	/** Any post-fx toggle on? If not, skip the composer for performance. */
+	_isPostFXEnabled() {
+		const s = this.state;
+		return !!(s && (s.bloom || s.ssao || s.filmGrain));
+	}
+
+	/**
+	 * Push state values into the live passes and flip their `enabled` flags.
+	 * Called from every post-fx schema setter.
+	 */
+	_updatePostProcessing() {
+		const s = this.state;
+		if (this.bloomPass) {
+			this.bloomPass.enabled = !!s.bloom;
+			this.bloomPass.strength = s.bloomStrength;
+			this.bloomPass.threshold = s.bloomThreshold;
+			this.bloomPass.radius = s.bloomRadius;
+		}
+		if (this.ssaoPass) {
+			this.ssaoPass.enabled = !!s.ssao;
+			// SSAOPass exposes `output` + `kernelRadius`; translate strength to
+			// a sensible kernel radius range so the slider has visible effect.
+			this.ssaoPass.kernelRadius = 4 + s.ssaoStrength * 12;
+		}
+		if (this.filmPass) {
+			this.filmPass.enabled = !!s.filmGrain;
+			// three r176's FilmPass exposes uniforms on `.uniforms` (shader pass).
+			const u = this.filmPass.uniforms;
+			if (u && u.intensity) u.intensity.value = s.filmGrainIntensity;
+		}
 	}
 
 	load(url, rootPath, assetMap, onProgress) {
@@ -410,6 +534,48 @@ export class Viewer {
 				}
 			});
 		}
+
+		// Keep the post-processing passes pointed at the live camera.
+		if (this.renderPass) this.renderPass.camera = this.activeCamera;
+		if (this.ssaoPass) this.ssaoPass.camera = this.activeCamera;
+	}
+
+	_cameraPreset(preset) {
+		if (!this.content) return;
+		const box = new Box3().setFromObject(this.content);
+		const size = box.getSize(new Vector3());
+		const center = box.getCenter(new Vector3());
+		const radius = Math.max(size.x, size.y, size.z);
+		const dist = radius * 1.8 || 1;
+
+		this.setCamera(DEFAULT_CAMERA);
+		this.controls.target.copy(center);
+
+		const cam = this.defaultCamera;
+		switch (preset) {
+			case 'top':
+				cam.position.set(center.x, center.y + dist, center.z + 0.001);
+				break;
+			case 'front':
+				cam.position.set(center.x, center.y, center.z + dist);
+				break;
+			case 'back':
+				cam.position.set(center.x, center.y, center.z - dist);
+				break;
+			case 'side':
+				cam.position.set(center.x + dist, center.y, center.z);
+				break;
+			case 'iso':
+				cam.position.set(center.x + dist * 0.7, center.y + dist * 0.7, center.z + dist * 0.7);
+				break;
+			case 'reset':
+			default:
+				cam.position.set(center.x + size.x / 2, center.y + size.y / 5, center.z + size.z / 2);
+				break;
+		}
+		cam.lookAt(center);
+		cam.updateProjectionMatrix();
+		this.controls.update();
 	}
 
 	updateLights() {
@@ -890,32 +1056,53 @@ export class Viewer {
 				label: 'MAP',
 				rows: [
 					{
-						key: 'overview',
-						label: 'Overview',
+						key: 'frame',
+						label: 'Frame Model',
+						type: 'action',
+						desc: 'Reset the camera to frame the whole model.',
+						run: () => this._cameraPreset('reset'),
+					},
+					{
+						key: 'top',
+						label: 'Top View',
+						type: 'action',
+						desc: 'Look straight down the Y axis.',
+						run: () => this._cameraPreset('top'),
+					},
+					{
+						key: 'front',
+						label: 'Front View',
+						type: 'action',
+						desc: 'Look down the +Z axis.',
+						run: () => this._cameraPreset('front'),
+					},
+					{
+						key: 'side',
+						label: 'Side View',
+						type: 'action',
+						desc: 'Look down the +X axis.',
+						run: () => this._cameraPreset('side'),
+					},
+					{
+						key: 'back',
+						label: 'Back View',
+						type: 'action',
+						desc: 'Look down the -Z axis.',
+						run: () => this._cameraPreset('back'),
+					},
+					{
+						key: 'iso',
+						label: 'Isometric',
+						type: 'action',
+						desc: 'Classic 3/4 isometric view.',
+						run: () => this._cameraPreset('iso'),
+					},
+					{
+						key: 'schematic',
+						label: 'Schematic',
 						type: 'map',
 						view: 'overview',
 						desc: 'Top-down schematic of the loaded model. Your viewpoint is the red marker.',
-					},
-					{
-						key: 'dimensions',
-						label: 'Dimensions',
-						type: 'map',
-						view: 'dimensions',
-						desc: 'Bounding-box extents along each world axis, in scene units.',
-					},
-					{
-						key: 'axes',
-						label: 'Axes',
-						type: 'map',
-						view: 'axes',
-						desc: 'Cardinal orientation and the world-axis legend.',
-					},
-					{
-						key: 'center',
-						label: 'Center',
-						type: 'map',
-						view: 'center',
-						desc: 'World-space center of the bounding box.',
 					},
 				],
 			},
@@ -1172,6 +1359,109 @@ export class Viewer {
 						set: (v) => {
 							state.directColor = v;
 							this.updateLights();
+						},
+					},
+					// --- Post-processing ---
+					{
+						key: 'bloom',
+						label: 'Bloom',
+						type: 'bool',
+						desc: 'Physically loose bloom pass (UnrealBloomPass). Toggling this on activates the post-processing pipeline; off bypasses it entirely.',
+						get: () => state.bloom,
+						set: (v) => {
+							state.bloom = v;
+							this._updatePostProcessing();
+						},
+					},
+					{
+						key: 'bloomStrength',
+						label: 'Bloom Strength',
+						type: 'num',
+						min: 0,
+						max: 3,
+						step: 0.01,
+						desc: 'Intensity of the bloom highlight.',
+						get: () => state.bloomStrength,
+						set: (v) => {
+							state.bloomStrength = v;
+							this._updatePostProcessing();
+						},
+					},
+					{
+						key: 'bloomThreshold',
+						label: 'Bloom Threshold',
+						type: 'num',
+						min: 0,
+						max: 1,
+						step: 0.01,
+						desc: 'Luminance threshold above which pixels contribute to bloom.',
+						get: () => state.bloomThreshold,
+						set: (v) => {
+							state.bloomThreshold = v;
+							this._updatePostProcessing();
+						},
+					},
+					{
+						key: 'bloomRadius',
+						label: 'Bloom Radius',
+						type: 'num',
+						min: 0,
+						max: 1,
+						step: 0.01,
+						desc: 'How far the bloom halo spreads.',
+						get: () => state.bloomRadius,
+						set: (v) => {
+							state.bloomRadius = v;
+							this._updatePostProcessing();
+						},
+					},
+					{
+						key: 'ssao',
+						label: 'SSAO',
+						type: 'bool',
+						desc: 'Screen-space ambient occlusion. Darkens crevices for added depth.',
+						get: () => state.ssao,
+						set: (v) => {
+							state.ssao = v;
+							this._updatePostProcessing();
+						},
+					},
+					{
+						key: 'ssaoStrength',
+						label: 'SSAO Strength',
+						type: 'num',
+						min: 0,
+						max: 2,
+						step: 0.01,
+						desc: 'Controls the effective kernel radius of the AO sampler.',
+						get: () => state.ssaoStrength,
+						set: (v) => {
+							state.ssaoStrength = v;
+							this._updatePostProcessing();
+						},
+					},
+					{
+						key: 'filmGrain',
+						label: 'Film Grain',
+						type: 'bool',
+						desc: 'Adds subtle animated noise for a filmic feel.',
+						get: () => state.filmGrain,
+						set: (v) => {
+							state.filmGrain = v;
+							this._updatePostProcessing();
+						},
+					},
+					{
+						key: 'filmGrainIntensity',
+						label: 'Grain Intensity',
+						type: 'num',
+						min: 0,
+						max: 1,
+						step: 0.01,
+						get: () => state.filmGrainIntensity,
+						set: (v) => {
+							state.filmGrainIntensity = v;
+							this._updatePostProcessing();
 						},
 					},
 				],
@@ -2782,28 +3072,215 @@ export class Viewer {
 	_startMetaLoop() {
 		if (this._metaLoopStarted) return;
 		this._metaLoopStarted = true;
+
+		// Legacy pause-menu meta elements (kept in sync for back-compat if present).
 		const fpsEl = document.getElementById('pm-fps');
 		const trisEl = document.getElementById('pm-tris');
 		const callsEl = document.getElementById('pm-calls');
-		let last = performance.now();
-		let frames = 0;
+
+		// Build the permanent top-right HUD (amber sparklines + tabular values).
+		this._buildHud();
+
+		// Rolling 60-frame buffers for sparklines.
+		const BUF = 60;
+		const buffers = {
+			fps: new Float32Array(BUF),
+			ms: new Float32Array(BUF),
+			tris: new Float32Array(BUF),
+			calls: new Float32Array(BUF),
+			mem: new Float32Array(BUF),
+			geo: new Float32Array(BUF),
+			tex: new Float32Array(BUF),
+		};
+		this._hudBuffers = buffers;
+
+		const push = (key, v) => {
+			const b = buffers[key];
+			b.copyWithin(0, 1);
+			b[BUF - 1] = v;
+		};
+
+		// Per-frame FPS/ms: smoothed EMA of instantaneous 1000/dt, plus raw ms.
+		let prev = performance.now();
+		let fpsEma = 60;
+		let lastRender = 0;
+
 		const tick = (t) => {
-			frames++;
-			if (t - last >= 500) {
-				const fps = Math.round((frames * 1000) / (t - last));
-				if (fpsEl) fpsEl.textContent = fps;
-				frames = 0;
-				last = t;
-			}
-			if (this.renderer && this.renderer.info) {
-				const tri = this.renderer.info.render.triangles;
-				const calls = this.renderer.info.render.calls;
+			const dt = Math.max(0.5, t - prev);
+			prev = t;
+			const instFps = 1000 / dt;
+			fpsEma = fpsEma + 0.1 * (instFps - fpsEma); // alpha ~ 0.1
+
+			const info = this.renderer && this.renderer.info;
+			const tri = info ? info.render.triangles : 0;
+			const calls = info ? info.render.calls : 0;
+			const geo = info ? info.memory.geometries : 0;
+			const tex = info ? info.memory.textures : 0;
+			const memMB =
+				performance.memory && performance.memory.usedJSHeapSize
+					? performance.memory.usedJSHeapSize / (1024 * 1024)
+					: 0;
+
+			push('fps', fpsEma);
+			push('ms', dt);
+			push('tris', tri);
+			push('calls', calls);
+			push('mem', memMB);
+			push('geo', geo);
+			push('tex', tex);
+
+			// Refresh DOM ~10Hz (every ~100ms) to keep readout stable + cheap.
+			if (t - lastRender >= 100) {
+				lastRender = t;
+				const fpsRounded = Math.round(fpsEma);
+				if (fpsEl) fpsEl.textContent = fpsRounded;
 				if (trisEl) trisEl.textContent = tri.toLocaleString();
 				if (callsEl) callsEl.textContent = calls;
+				this._renderHud({
+					fps: fpsRounded,
+					ms: dt,
+					tris: tri,
+					calls,
+					mem: memMB,
+					geo,
+					tex,
+				});
 			}
 			requestAnimationFrame(tick);
 		};
 		requestAnimationFrame(tick);
+	}
+
+	_buildHud() {
+		const hud = document.getElementById('hud');
+		if (!hud || hud._built) return;
+		hud._built = true;
+
+		// Metric schema — order defines display order. Compact shows the first 3.
+		const metrics = [
+			{ key: 'fps', label: 'FPS' },
+			{ key: 'ms', label: 'MS' },
+			{ key: 'calls', label: 'CALLS' },
+			{ key: 'tris', label: 'TRIS' },
+			{ key: 'mem', label: 'MEM' },
+			{ key: 'geo', label: 'GEO' },
+			{ key: 'tex', label: 'TEX' },
+		];
+
+		const svgNS = 'http://www.w3.org/2000/svg';
+		hud.innerHTML = '';
+		metrics.forEach((m) => {
+			const row = document.createElement('div');
+			row.className = 'hud__row';
+			row.dataset.metric = m.key;
+
+			const label = document.createElement('span');
+			label.className = 'hud__label';
+			label.textContent = m.label;
+
+			const value = document.createElement('span');
+			value.className = 'hud__value';
+			value.id = `hud-v-${m.key}`;
+			value.textContent = '—';
+
+			const svg = document.createElementNS(svgNS, 'svg');
+			svg.setAttribute('class', 'hud__chart');
+			svg.setAttribute('viewBox', '0 0 60 20');
+			svg.setAttribute('preserveAspectRatio', 'none');
+			svg.setAttribute('aria-hidden', 'true');
+			const fill = document.createElementNS(svgNS, 'path');
+			fill.setAttribute('class', 'hud__chart-fill');
+			fill.id = `hud-f-${m.key}`;
+			const line = document.createElementNS(svgNS, 'path');
+			line.setAttribute('class', 'hud__chart-line');
+			line.id = `hud-p-${m.key}`;
+			svg.appendChild(fill);
+			svg.appendChild(line);
+
+			row.appendChild(label);
+			row.appendChild(value);
+			row.appendChild(svg);
+			hud.appendChild(row);
+		});
+
+		// Reveal the HUD node — actual visibility is CSS-gated by body.has-model.
+		hud.hidden = false;
+		hud.setAttribute('aria-hidden', 'false');
+		hud.title = 'Click to expand / collapse';
+		hud.tabIndex = 0;
+
+		// Click (or Enter/Space) toggles compact <-> expanded.
+		const toggle = () => {
+			hud.classList.toggle('hud--expanded');
+			if (this._hudBuffers) this._redrawSparklines();
+		};
+		hud.addEventListener('click', toggle);
+		hud.addEventListener('keydown', (e) => {
+			if (e.key === 'Enter' || e.key === ' ') {
+				e.preventDefault();
+				toggle();
+			}
+		});
+	}
+
+	_renderHud(v) {
+		const set = (id, text) => {
+			const el = document.getElementById(id);
+			if (el) el.textContent = text;
+		};
+		const fmtCount = (n) =>
+			n >= 1000 ? `${(n / 1000).toFixed(n >= 100000 ? 0 : 1)}K` : String(n);
+		set('hud-v-fps', String(v.fps));
+		set('hud-v-ms', v.ms.toFixed(1));
+		set('hud-v-calls', String(v.calls));
+		set('hud-v-tris', fmtCount(v.tris));
+		set('hud-v-mem', v.mem ? `${v.mem.toFixed(0)} MB` : 'N/A');
+		set('hud-v-geo', String(v.geo));
+		set('hud-v-tex', String(v.tex));
+		this._redrawSparklines();
+	}
+
+	_redrawSparklines() {
+		const hud = document.getElementById('hud');
+		// Sparklines only render in expanded mode (they're hidden otherwise).
+		if (!hud || !hud.classList.contains('hud--expanded')) return;
+		const buffers = this._hudBuffers;
+		if (!buffers) return;
+		const W = 60;
+		const H = 20;
+		const keys = ['fps', 'ms', 'calls', 'tris', 'mem', 'geo', 'tex'];
+		for (const k of keys) {
+			const buf = buffers[k];
+			let min = Infinity;
+			let max = -Infinity;
+			for (let i = 0; i < buf.length; i++) {
+				const s = buf[i];
+				if (s < min) min = s;
+				if (s > max) max = s;
+			}
+			if (!isFinite(min) || !isFinite(max)) {
+				min = 0;
+				max = 1;
+			}
+			if (max - min < 1e-6) {
+				// Flat series — pad the range so the line is centred & visible.
+				const pad = Math.max(1, Math.abs(max) * 0.1);
+				min -= pad;
+				max += pad;
+			}
+			const range = max - min;
+			const step = W / (buf.length - 1);
+			let d = '';
+			for (let i = 0; i < buf.length; i++) {
+				const x = i * step;
+				const y = H - ((buf[i] - min) / range) * H;
+				d += (i === 0 ? 'M' : 'L') + x.toFixed(2) + ',' + y.toFixed(2) + ' ';
+			}
+			const line = document.getElementById(`hud-p-${k}`);
+			const fill = document.getElementById(`hud-f-${k}`);
+			if (line) line.setAttribute('d', d.trim());
+			if (fill) fill.setAttribute('d', (d + `L${W},${H} L0,${H} Z`).trim());
+		}
 	}
 
 	updateGUI() {

@@ -443,35 +443,9 @@ body:not(.has-model) .pm__toggle {
 	gap: 28px;
 }
 
-.pm__meta-stack {
-	display: flex;
-	flex-direction: column;
-	align-items: flex-end;
-	line-height: 1;
-	gap: 4px;
-}
-
-.pm__meta-label {
-	font-size: var(--fs-meta);
-	letter-spacing: var(--tracking-loose);
-	color: var(--text-dim);
-	text-transform: uppercase;
-}
-
-.pm__meta-value {
-	font-size: var(--fs-value);
-	font-weight: 500;
-	color: var(--text);
-	letter-spacing: var(--tracking);
-	font-variant-numeric: tabular-nums;
-}
-
 .pm__swatches {
 	display: flex;
 	gap: 8px;
-	padding-right: 12px;
-	border-right: 1px solid var(--divider);
-	margin-right: 6px;
 	height: 20px;
 	align-items: center;
 }
@@ -1071,6 +1045,112 @@ body[data-menu-open="false"] .pm__toggle { display: inline-flex; }
 body[data-menu-open="false"] .pm__toggle[hidden] { display: inline-flex; }
 
 /* =============================================================
+ * Performance HUD — permanent top-right readout, sits to the LEFT
+ * of the MENU button to form one visual cluster.
+ * Visible only after first model load (body.has-model) and never
+ * while the pause menu is open (we don't want to double-display).
+ * ============================================================= */
+body:not(.has-model) .hud { display: none !important; }
+body[data-menu-open="true"] .hud { display: none !important; }
+
+.hud {
+	position: fixed;
+	top: 16px;
+	/* Leaves a generous gap for the MENU button (~82-96px wide + 16px edge + 10px gap). */
+	right: 124px;
+	z-index: 20;
+	width: 220px;
+	padding: 8px 10px;
+	background: rgba(0, 0, 0, 0.85);
+	border: 1px solid var(--divider);
+	color: var(--text);
+	font-family: var(--font);
+	font-weight: 500;
+	font-size: 12px;
+	line-height: 1;
+	letter-spacing: 0;
+	backdrop-filter: blur(4px);
+	-webkit-backdrop-filter: blur(4px);
+	cursor: pointer;
+	user-select: none;
+	display: flex;
+	flex-direction: column;
+	gap: 0;
+	transition: width var(--dur-cross) var(--ease-gta), border-color var(--dur-snap) linear;
+}
+
+.hud[hidden] { display: none !important; }
+
+.hud:hover { border-color: color-mix(in srgb, var(--accent) 55%, var(--divider)); }
+.hud:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.hud--expanded { width: 360px; }
+
+.hud__row {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+	height: 24px;
+	padding: 0 2px;
+	border-top: 1px solid rgba(95, 95, 95, 0.35);
+}
+
+.hud__row:first-child { border-top: 0; }
+
+.hud__label {
+	flex: 0 0 auto;
+	text-transform: uppercase;
+	color: var(--text-dim);
+	letter-spacing: 0.14em;
+	font-size: 10px;
+	font-weight: 500;
+}
+
+.hud__value {
+	flex: 1 1 auto;
+	text-align: right;
+	color: var(--accent);
+	font-weight: 500;
+	font-size: 12px;
+	font-variant-numeric: tabular-nums;
+	font-feature-settings: 'tnum' 1;
+	white-space: nowrap;
+	text-shadow: 0 0 6px color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+.hud__chart {
+	flex: 0 0 60px;
+	width: 60px;
+	height: 18px;
+	display: none;
+	overflow: visible;
+}
+
+.hud--expanded .hud__chart { display: block; }
+
+.hud__chart path.hud__chart-line {
+	fill: none;
+	stroke: var(--accent);
+	stroke-width: 1.5;
+	stroke-linecap: square;
+	stroke-linejoin: miter;
+}
+
+.hud__chart path.hud__chart-fill {
+	fill: color-mix(in srgb, var(--accent) 18%, transparent);
+	stroke: none;
+}
+
+/* Hide non-essential rows in compact mode (keep FPS, MS, CALLS) */
+.hud:not(.hud--expanded) .hud__row[data-metric="tris"],
+.hud:not(.hud--expanded) .hud__row[data-metric="geo"],
+.hud:not(.hud--expanded) .hud__row[data-metric="tex"],
+.hud:not(.hud--expanded) .hud__row[data-metric="mem"] {
+	display: none;
+}
+
+/* =============================================================
  * Validation report — GTA V pause-menu styled
  *   - Toggle pill: bottom-left, black bg, amber left-bar.
  *   - Full-width report panel: fixed overlay, blurred, uppercase
@@ -1661,7 +1741,6 @@ body[data-menu-open="false"] .pm__toggle[hidden] { display: inline-flex; }
 	.pm__topbar { padding: 0 20px; }
 	.pm__tabs { gap: 20px; }
 	.pm__meta { gap: 14px; }
-	.pm__meta-stack:nth-child(n+3) { display: none; }
 	.pm__pane { padding: 20px; }
 	.pm__footer { padding: 0 20px; gap: 12px; overflow-x: auto; }
 }
