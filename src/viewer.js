@@ -71,7 +71,7 @@ export class Viewer {
 				options.preset === Preset.ASSET_GENERATOR
 					? environments.find((e) => e.id === 'footprint-court').name
 					: environments[1].name,
-			background: false,
+			background: true,
 			playbackSpeed: 1.0,
 			actionStates: {},
 			camera: DEFAULT_CAMERA,
@@ -482,10 +482,30 @@ export class Viewer {
 			(entry) => entry.name === this.state.environment,
 		)[0];
 
-		this.getCubeMapTexture(environment).then(({ envMap }) => {
-			this.scene.environment = envMap;
-			this.scene.background = this.state.background ? envMap : this.backgroundColor;
-		});
+		if (!environment) return;
+
+		this.getCubeMapTexture(environment)
+			.then(({ envMap }) => {
+				this.scene.environment = envMap;
+				// Show the envMap as background whenever one is loaded,
+				// unless the user has explicitly turned `background` off.
+				if (envMap && this.state.background !== false) {
+					this.scene.background = envMap;
+				} else {
+					this.scene.background = this.backgroundColor;
+				}
+			})
+			.catch((err) => {
+				console.error('Failed to load environment:', environment.name, err);
+				this.scene.environment = null;
+				this.scene.background = this.backgroundColor;
+				if (window.VIEWER && window.VIEWER.toast) {
+					window.VIEWER.toast(`ENV LOAD FAILED · ${environment.name}`, {
+						level: 'error',
+						duration: 4000,
+					});
+				}
+			});
 	}
 
 	getCubeMapTexture(environment) {
