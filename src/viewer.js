@@ -501,13 +501,18 @@ export class Viewer {
 			return Promise.resolve({ envMap: null });
 		}
 
+		this._envCache ||= new Map();
+		if (this._envCache.has(id)) {
+			return Promise.resolve({ envMap: this._envCache.get(id) });
+		}
+
 		return new Promise((resolve, reject) => {
 			new EXRLoader().load(
 				path,
 				(texture) => {
 					const envMap = this.pmremGenerator.fromEquirectangular(texture).texture;
-					this.pmremGenerator.dispose();
-
+					texture.dispose();
+					this._envCache.set(id, envMap);
 					resolve({ envMap });
 				},
 				undefined,
@@ -1776,7 +1781,6 @@ export class Viewer {
 	_renderMapPane(editorEl, row) {
 		const view = row.view || 'overview';
 
-		// Compute bounding box from the loaded content (if any).
 		let box = null;
 		const size = new Vector3();
 		const center = new Vector3();
@@ -1785,24 +1789,46 @@ export class Viewer {
 			box.getSize(size);
 			box.getCenter(center);
 		}
+		const geom = { hasModel: !!box, box, size, center };
 
-		const hasModel = !!box;
+		const wrap = document.createElement('div');
+		wrap.className = 'pm__map';
+		wrap.dataset.view = view;
 
-		// SVG viewBox: 400x400; model footprint maps into a padded 320x320 area.
+		if (view === 'dimensions') this._renderMapDimensions(wrap, geom);
+		else if (view === 'axes') this._renderMapAxes(wrap, geom);
+		else if (view === 'center') this._renderMapCenter(wrap, geom);
+		else this._renderMapOverview(wrap, geom);
+
+		if (!geom.hasModel && view !== 'axes') {
+			const empty = document.createElement('p');
+			empty.className = 'pm__empty pm__map-empty';
+			empty.innerHTML = '<em>No model loaded.</em>';
+			wrap.appendChild(empty);
+		}
+
+		editorEl.appendChild(wrap);
+	}
+
+	_fmtMap(n) {
+		if (typeof n !== 'number' || !Number.isFinite(n)) return '—';
+		return Math.abs(n) >= 100 ? n.toFixed(1) : n.toFixed(3);
+	}
+
+	_buildMiniMapSVG(geom, opts = {}) {
+		const { hasModel, box, size, center } = geom;
+		const svgNS = 'http://www.w3.org/2000/svg';
 		const VB = 400;
 		const PAD = 40;
 		const INNER = VB - PAD * 2;
-
-		const svgNS = 'http://www.w3.org/2000/svg';
 
 		const svg = document.createElementNS(svgNS, 'svg');
 		svg.setAttribute('class', 'pm__map-svg');
 		svg.setAttribute('viewBox', `0 0 ${VB} ${VB}`);
 		svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
 		svg.setAttribute('role', 'img');
-		svg.setAttribute('aria-label', 'Top-down minimap of the loaded model');
+		svg.setAttribute('aria-label', opts.ariaLabel || 'Top-down minimap of the loaded model');
 
-		// Frame.
 		const frame = document.createElementNS(svgNS, 'rect');
 		frame.setAttribute('x', PAD);
 		frame.setAttribute('y', PAD);
@@ -1811,7 +1837,6 @@ export class Viewer {
 		frame.setAttribute('class', 'pm__map-frame');
 		svg.appendChild(frame);
 
-		// Grid (faint ticks).
 		const grid = document.createElementNS(svgNS, 'g');
 		grid.setAttribute('class', 'pm__map-grid');
 		const DIVISIONS = 10;
@@ -1832,7 +1857,6 @@ export class Viewer {
 		}
 		svg.appendChild(grid);
 
-		// Center axes (stronger stroke).
 		const axesG = document.createElementNS(svgNS, 'g');
 		axesG.setAttribute('class', 'pm__map-axes');
 		const hAxis = document.createElementNS(svgNS, 'line');
@@ -1849,7 +1873,6 @@ export class Viewer {
 		axesG.appendChild(vAxis);
 		svg.appendChild(axesG);
 
-		// Cardinal labels.
 		const labels = [
 			['N', VB / 2, PAD - 14],
 			['S', VB / 2, PAD + INNER + 22],
@@ -1866,44 +1889,42 @@ export class Viewer {
 			svg.appendChild(tx);
 		});
 
-		// Axis legend (bottom-left corner, inside frame).
-		const legend = document.createElementNS(svgNS, 'g');
-		legend.setAttribute('class', 'pm__map-legend');
-		legend.setAttribute('transform', `translate(${PAD + 6}, ${PAD + INNER - 28})`);
-		const legendBg = document.createElementNS(svgNS, 'rect');
-		legendBg.setAttribute('x', 0);
-		legendBg.setAttribute('y', 0);
-		legendBg.setAttribute('width', 62);
-		legendBg.setAttribute('height', 22);
-		legendBg.setAttribute('class', 'pm__map-legend-bg');
-		legend.appendChild(legendBg);
-		const legendX = document.createElementNS(svgNS, 'text');
-		legendX.setAttribute('x', 8);
-		legendX.setAttribute('y', 15);
-		legendX.setAttribute('class', 'pm__map-legend-x');
-		legendX.textContent = '+X';
-		legend.appendChild(legendX);
-		const legendZ = document.createElementNS(svgNS, 'text');
-		legendZ.setAttribute('x', 34);
-		legendZ.setAttribute('y', 15);
-		legendZ.setAttribute('class', 'pm__map-legend-z');
-		legendZ.textContent = '+Z';
-		legend.appendChild(legendZ);
-		svg.appendChild(legend);
+		if (opts.showLegend !== false) {
+			const legend = document.createElementNS(svgNS, 'g');
+			legend.setAttribute('class', 'pm__map-legend');
+			legend.setAttribute('transform', `translate(${PAD + 6}, ${PAD + INNER - 28})`);
+			const legendBg = document.createElementNS(svgNS, 'rect');
+			legendBg.setAttribute('x', 0);
+			legendBg.setAttribute('y', 0);
+			legendBg.setAttribute('width', 62);
+			legendBg.setAttribute('height', 22);
+			legendBg.setAttribute('class', 'pm__map-legend-bg');
+			legend.appendChild(legendBg);
+			const legendX = document.createElementNS(svgNS, 'text');
+			legendX.setAttribute('x', 8);
+			legendX.setAttribute('y', 15);
+			legendX.setAttribute('class', 'pm__map-legend-x');
+			legendX.textContent = '+X';
+			legend.appendChild(legendX);
+			const legendZ = document.createElementNS(svgNS, 'text');
+			legendZ.setAttribute('x', 34);
+			legendZ.setAttribute('y', 15);
+			legendZ.setAttribute('class', 'pm__map-legend-z');
+			legendZ.textContent = '+Z';
+			legend.appendChild(legendZ);
+			svg.appendChild(legend);
+		}
 
-		// Projection helpers: X -> SVG x, Z -> SVG y (+Z goes south/down).
 		const rangeX = hasModel ? Math.max(size.x, 1e-6) : 1;
 		const rangeZ = hasModel ? Math.max(size.z, 1e-6) : 1;
-		const worldRange = Math.max(rangeX, rangeZ) * 1.4; // 40% pad for markers
+		const worldRange = Math.max(rangeX, rangeZ) * 1.4;
 		const cx = hasModel ? center.x : 0;
 		const cz = hasModel ? center.z : 0;
-
 		const worldToSvgX = (wx) => VB / 2 + ((wx - cx) / worldRange) * INNER;
 		const worldToSvgY = (wz) => VB / 2 + ((wz - cz) / worldRange) * INNER;
 		const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 
-		// Model footprint rectangle.
-		if (hasModel) {
+		if (hasModel && opts.showFootprint !== false) {
 			const fx = worldToSvgX(box.min.x);
 			const fz = worldToSvgY(box.min.z);
 			const fx2 = worldToSvgX(box.max.x);
@@ -1915,52 +1936,92 @@ export class Viewer {
 			footprint.setAttribute('height', Math.abs(fz2 - fz));
 			footprint.setAttribute('class', 'pm__map-footprint');
 			svg.appendChild(footprint);
+		}
 
+		if (hasModel && opts.showCenter !== false) {
+			if (opts.emphasizeCenter) {
+				const ccx = worldToSvgX(cx);
+				const ccy = worldToSvgY(cz);
+				const L = 30;
+				const mk = (x1, y1, x2, y2) => {
+					const l = document.createElementNS(svgNS, 'line');
+					l.setAttribute('x1', x1);
+					l.setAttribute('y1', y1);
+					l.setAttribute('x2', x2);
+					l.setAttribute('y2', y2);
+					l.setAttribute('class', 'pm__map-crosshair');
+					svg.appendChild(l);
+				};
+				mk(ccx - L, ccy, ccx - 6, ccy);
+				mk(ccx + 6, ccy, ccx + L, ccy);
+				mk(ccx, ccy - L, ccx, ccy - 6);
+				mk(ccx, ccy + 6, ccx, ccy + L);
+			}
 			const centerDot = document.createElementNS(svgNS, 'circle');
 			centerDot.setAttribute('cx', worldToSvgX(cx));
 			centerDot.setAttribute('cy', worldToSvgY(cz));
-			centerDot.setAttribute('r', 3);
+			centerDot.setAttribute('r', opts.emphasizeCenter ? 5 : 3);
 			centerDot.setAttribute('class', 'pm__map-center');
 			svg.appendChild(centerDot);
 		}
 
-		// "You are here" camera marker (live-updated).
-		const camMarker = document.createElementNS(svgNS, 'g');
-		camMarker.setAttribute('class', 'pm__map-cam');
-		const camHalo = document.createElementNS(svgNS, 'circle');
-		camHalo.setAttribute('r', 9);
-		camHalo.setAttribute('class', 'pm__map-cam-halo');
-		camMarker.appendChild(camHalo);
-		const camDot = document.createElementNS(svgNS, 'circle');
-		camDot.setAttribute('r', 4);
-		camDot.setAttribute('class', 'pm__map-cam-dot');
-		camMarker.appendChild(camDot);
-		const camHeading = document.createElementNS(svgNS, 'polygon');
-		camHeading.setAttribute('points', '0,-14 5,-4 -5,-4');
-		camHeading.setAttribute('class', 'pm__map-cam-heading');
-		camMarker.appendChild(camHeading);
-		svg.appendChild(camMarker);
+		let camMarker = null;
+		if (opts.showCamMarker !== false) {
+			camMarker = document.createElementNS(svgNS, 'g');
+			camMarker.setAttribute('class', 'pm__map-cam');
+			const camHalo = document.createElementNS(svgNS, 'circle');
+			camHalo.setAttribute('r', 9);
+			camHalo.setAttribute('class', 'pm__map-cam-halo');
+			camMarker.appendChild(camHalo);
+			const camDot = document.createElementNS(svgNS, 'circle');
+			camDot.setAttribute('r', 4);
+			camDot.setAttribute('class', 'pm__map-cam-dot');
+			camMarker.appendChild(camDot);
+			const camHeading = document.createElementNS(svgNS, 'polygon');
+			camHeading.setAttribute('points', '0,-14 5,-4 -5,-4');
+			camHeading.setAttribute('class', 'pm__map-cam-heading');
+			camMarker.appendChild(camHeading);
+			svg.appendChild(camMarker);
+		}
 
-		const wrap = document.createElement('div');
-		wrap.className = 'pm__map';
-		wrap.dataset.view = view;
-		wrap.appendChild(svg);
+		const viewer = this;
+		const startTicker = (onTick) => {
+			const tmp = new Vector3();
+			const tmpDir = new Vector3();
+			const tick = () => {
+				if (!svg.isConnected) {
+					viewer._mapTickerId = null;
+					return;
+				}
+				const cam = viewer.activeCamera || viewer.defaultCamera;
+				cam.getWorldPosition(tmp);
+				cam.getWorldDirection(tmpDir);
+				const headingDeg = (Math.atan2(tmpDir.x, -tmpDir.z) * 180) / Math.PI;
+				if (camMarker) {
+					const px = clamp(worldToSvgX(tmp.x), PAD, PAD + INNER);
+					const py = clamp(worldToSvgY(tmp.z), PAD, PAD + INNER);
+					camMarker.setAttribute('transform', `translate(${px}, ${py}) rotate(${headingDeg})`);
+				}
+				if (onTick) onTick({ headingDeg, dir: tmpDir, pos: tmp });
+				viewer._mapTickerId = requestAnimationFrame(tick);
+			};
+			viewer._mapTickerId = requestAnimationFrame(tick);
+		};
 
-		const fmt = (n) =>
-			typeof n === 'number' && Number.isFinite(n)
-				? Math.abs(n) >= 100
-					? n.toFixed(1)
-					: n.toFixed(3)
-				: '—';
+		return { svg, startTicker };
+	}
 
-		const stats = hasModel
+	_buildMapStats(geom, filter) {
+		const { hasModel, size, center } = geom;
+		const f = (n) => this._fmtMap(n);
+		const all = hasModel
 			? [
-					['Width', fmt(size.x), 'x'],
-					['Height', fmt(size.y), 'y'],
-					['Depth', fmt(size.z), 'z'],
-					['Center X', fmt(center.x), 'x'],
-					['Center Y', fmt(center.y), 'y'],
-					['Center Z', fmt(center.z), 'z'],
+					['Width', f(size.x), 'x'],
+					['Height', f(size.y), 'y'],
+					['Depth', f(size.z), 'z'],
+					['Center X', f(center.x), 'x'],
+					['Center Y', f(center.y), 'y'],
+					['Center Z', f(center.z), 'z'],
 				]
 			: [
 					['Width', '—', 'x'],
@@ -1970,9 +2031,9 @@ export class Viewer {
 					['Center Y', '—', 'y'],
 					['Center Z', '—', 'z'],
 				];
-
-		const statsGrid = document.createElement('div');
-		statsGrid.className = 'pm__map-stats';
+		const stats = filter === 'dim' ? all.slice(0, 3) : filter === 'center' ? all.slice(3) : all;
+		const grid = document.createElement('div');
+		grid.className = 'pm__map-stats';
 		stats.forEach(([label, value, axis]) => {
 			const cell = document.createElement('div');
 			cell.className = 'pm__map-stat';
@@ -1982,38 +2043,242 @@ export class Viewer {
 				'<span class="pm__map-stat-value"></span>';
 			cell.querySelector('.pm__map-stat-label').textContent = label.toUpperCase();
 			cell.querySelector('.pm__map-stat-value').textContent = value;
-			statsGrid.appendChild(cell);
+			grid.appendChild(cell);
 		});
-		wrap.appendChild(statsGrid);
+		return grid;
+	}
 
-		if (!hasModel) {
-			const empty = document.createElement('p');
-			empty.className = 'pm__empty pm__map-empty';
-			empty.innerHTML = '<em>No model loaded.</em>';
-			wrap.appendChild(empty);
+	_renderMapOverview(wrap, geom) {
+		const { svg, startTicker } = this._buildMiniMapSVG(geom, {
+			showFootprint: true,
+			showCenter: true,
+			showCamMarker: true,
+		});
+		wrap.appendChild(svg);
+		wrap.appendChild(this._buildMapStats(geom, 'all'));
+		startTicker();
+	}
+
+	_renderMapDimensions(wrap, geom) {
+		const { hasModel, size } = geom;
+		const f = (n) => this._fmtMap(n);
+
+		const maxDim = hasModel ? Math.max(size.x, size.y, size.z, 1e-6) : 1;
+
+		const bars = document.createElement('div');
+		bars.className = 'pm__map-bars';
+		[
+			['Width', hasModel ? size.x : 0, 'x'],
+			['Height', hasModel ? size.y : 0, 'y'],
+			['Depth', hasModel ? size.z : 0, 'z'],
+		].forEach(([label, val, axis]) => {
+			const row = document.createElement('div');
+			row.className = 'pm__map-bar';
+			row.dataset.axis = axis;
+			const pct = hasModel ? Math.max(2, (val / maxDim) * 100) : 0;
+			row.innerHTML =
+				'<span class="pm__map-bar-label"></span>' +
+				'<div class="pm__map-bar-track"><div class="pm__map-bar-fill"></div></div>' +
+				'<span class="pm__map-bar-value"></span>';
+			row.querySelector('.pm__map-bar-label').textContent = label.toUpperCase();
+			row.querySelector('.pm__map-bar-fill').style.width = pct + '%';
+			row.querySelector('.pm__map-bar-value').textContent = hasModel ? f(val) : '—';
+			bars.appendChild(row);
+		});
+		wrap.appendChild(bars);
+
+		if (hasModel) {
+			const vol = size.x * size.y * size.z;
+			const dims = [size.x, size.y, size.z];
+			const longest = ['X', 'Y', 'Z'][dims.indexOf(maxDim)];
+			const aspect =
+				dims.map((d) => (d / maxDim).toFixed(2)).join(' : ');
+			const summary = document.createElement('div');
+			summary.className = 'pm__map-summary';
+			summary.innerHTML =
+				'<div class="pm__map-summary-item"><span class="pm__map-summary-label">VOLUME</span><span class="pm__map-summary-value" data-v="vol"></span></div>' +
+				'<div class="pm__map-summary-item"><span class="pm__map-summary-label">LONGEST AXIS</span><span class="pm__map-summary-value" data-v="long"></span></div>' +
+				'<div class="pm__map-summary-item"><span class="pm__map-summary-label">ASPECT X:Y:Z</span><span class="pm__map-summary-value" data-v="asp"></span></div>';
+			summary.querySelector('[data-v="vol"]').textContent = f(vol);
+			summary.querySelector('[data-v="long"]').textContent = longest;
+			summary.querySelector('[data-v="asp"]').textContent = aspect;
+			wrap.appendChild(summary);
+		}
+	}
+
+	_renderMapAxes(wrap /*, geom */) {
+		const svgNS = 'http://www.w3.org/2000/svg';
+		const compass = document.createElementNS(svgNS, 'svg');
+		compass.setAttribute('class', 'pm__map-svg pm__map-compass-svg');
+		compass.setAttribute('viewBox', '0 0 400 400');
+		compass.setAttribute('role', 'img');
+		compass.setAttribute('aria-label', 'Live camera heading compass');
+
+		const ring = document.createElementNS(svgNS, 'circle');
+		ring.setAttribute('cx', 200);
+		ring.setAttribute('cy', 200);
+		ring.setAttribute('r', 160);
+		ring.setAttribute('class', 'pm__map-compass-ring');
+		compass.appendChild(ring);
+
+		const ringInner = document.createElementNS(svgNS, 'circle');
+		ringInner.setAttribute('cx', 200);
+		ringInner.setAttribute('cy', 200);
+		ringInner.setAttribute('r', 118);
+		ringInner.setAttribute('class', 'pm__map-compass-ring-inner');
+		compass.appendChild(ringInner);
+
+		for (let deg = 0; deg < 360; deg += 15) {
+			const rad = ((deg - 90) * Math.PI) / 180;
+			const major = deg % 45 === 0;
+			const outer = 160;
+			const inner = major ? 138 : 150;
+			const t = document.createElementNS(svgNS, 'line');
+			t.setAttribute('x1', 200 + inner * Math.cos(rad));
+			t.setAttribute('y1', 200 + inner * Math.sin(rad));
+			t.setAttribute('x2', 200 + outer * Math.cos(rad));
+			t.setAttribute('y2', 200 + outer * Math.sin(rad));
+			t.setAttribute(
+				'class',
+				major ? 'pm__map-compass-tick pm__map-compass-tick--major' : 'pm__map-compass-tick',
+			);
+			compass.appendChild(t);
 		}
 
-		editorEl.appendChild(wrap);
+		[
+			['N', 200, 48],
+			['E', 358, 205],
+			['S', 200, 362],
+			['W', 42, 205],
+		].forEach(([t, x, y]) => {
+			const tx = document.createElementNS(svgNS, 'text');
+			tx.setAttribute('class', 'pm__map-cardinal pm__map-cardinal--big');
+			tx.setAttribute('x', x);
+			tx.setAttribute('y', y);
+			tx.setAttribute('text-anchor', 'middle');
+			tx.setAttribute('dominant-baseline', 'middle');
+			tx.textContent = t;
+			compass.appendChild(tx);
+		});
 
-		// Live-update loop: reproject the camera onto XZ each frame.
-		const tmp = new Vector3();
+		const axisG = (label, angleDeg, cls) => {
+			const g = document.createElementNS(svgNS, 'g');
+			g.setAttribute('transform', `translate(200, 200) rotate(${angleDeg})`);
+			const line = document.createElementNS(svgNS, 'line');
+			line.setAttribute('x1', 0);
+			line.setAttribute('y1', 0);
+			line.setAttribute('x2', 0);
+			line.setAttribute('y2', -92);
+			line.setAttribute('class', cls);
+			g.appendChild(line);
+			const tip = document.createElementNS(svgNS, 'polygon');
+			tip.setAttribute('points', '0,-104 6,-90 -6,-90');
+			tip.setAttribute('class', cls + ' pm__map-axis-tip');
+			g.appendChild(tip);
+			const lbl = document.createElementNS(svgNS, 'text');
+			lbl.setAttribute('x', 0);
+			lbl.setAttribute('y', -112);
+			lbl.setAttribute('text-anchor', 'middle');
+			lbl.setAttribute('class', cls + ' pm__map-axis-label');
+			lbl.textContent = label;
+			g.appendChild(lbl);
+			return g;
+		};
+		// Three.js: +X is east (right), +Z is south (toward camera when looking at origin from +Z).
+		compass.appendChild(axisG('+X', 90, 'pm__map-axis-x'));
+		compass.appendChild(axisG('+Z', 180, 'pm__map-axis-z'));
+
+		const pointer = document.createElementNS(svgNS, 'g');
+		pointer.setAttribute('class', 'pm__map-compass-pointer');
+		const p = document.createElementNS(svgNS, 'polygon');
+		p.setAttribute('points', '0,-128 11,-96 0,-104 -11,-96');
+		pointer.appendChild(p);
+		compass.appendChild(pointer);
+
+		wrap.appendChild(compass);
+
+		const readout = document.createElement('div');
+		readout.className = 'pm__map-summary';
+		readout.innerHTML =
+			'<div class="pm__map-summary-item"><span class="pm__map-summary-label">HEADING</span><span class="pm__map-summary-value" data-ro="heading">—</span></div>' +
+			'<div class="pm__map-summary-item"><span class="pm__map-summary-label">FACING</span><span class="pm__map-summary-value" data-ro="facing">—</span></div>' +
+			'<div class="pm__map-summary-item"><span class="pm__map-summary-label">PITCH</span><span class="pm__map-summary-value" data-ro="pitch">—</span></div>';
+		wrap.appendChild(readout);
+		const roHeading = readout.querySelector('[data-ro="heading"]');
+		const roFacing = readout.querySelector('[data-ro="facing"]');
+		const roPitch = readout.querySelector('[data-ro="pitch"]');
+
+		const facingOf = (deg) => {
+			const d = ((deg % 360) + 360) % 360;
+			const cards = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
+			return cards[Math.round(d / 45) % 8];
+		};
+
 		const tmpDir = new Vector3();
 		const tick = () => {
-			if (!svg.isConnected) {
+			if (!compass.isConnected) {
 				this._mapTickerId = null;
 				return;
 			}
 			const cam = this.activeCamera || this.defaultCamera;
-			cam.getWorldPosition(tmp);
-			const px = clamp(worldToSvgX(tmp.x), PAD, PAD + INNER);
-			const py = clamp(worldToSvgY(tmp.z), PAD, PAD + INNER);
 			cam.getWorldDirection(tmpDir);
-			// Heading on XZ; 0deg = north (up in SVG).
 			const headingDeg = (Math.atan2(tmpDir.x, -tmpDir.z) * 180) / Math.PI;
-			camMarker.setAttribute('transform', `translate(${px}, ${py}) rotate(${headingDeg})`);
+			pointer.setAttribute('transform', `rotate(${headingDeg})`);
+			const clampedY = Math.max(-1, Math.min(1, -tmpDir.y));
+			const pitchDeg = (Math.asin(clampedY) * 180) / Math.PI;
+			const normDeg = ((headingDeg % 360) + 360) % 360;
+			roHeading.textContent = normDeg.toFixed(0) + '°';
+			roFacing.textContent = facingOf(normDeg);
+			roPitch.textContent = pitchDeg.toFixed(0) + '°';
 			this._mapTickerId = requestAnimationFrame(tick);
 		};
 		this._mapTickerId = requestAnimationFrame(tick);
+	}
+
+	_renderMapCenter(wrap, geom) {
+		const { hasModel, center } = geom;
+		const f = (n) => this._fmtMap(n);
+
+		const { svg } = this._buildMiniMapSVG(geom, {
+			showFootprint: true,
+			showCenter: true,
+			emphasizeCenter: true,
+			showCamMarker: false,
+			ariaLabel: 'Top-down map emphasizing model center',
+		});
+		wrap.appendChild(svg);
+
+		const heroes = document.createElement('div');
+		heroes.className = 'pm__map-heroes';
+		[
+			['Center X', hasModel ? f(center.x) : '—', 'x'],
+			['Center Y', hasModel ? f(center.y) : '—', 'y'],
+			['Center Z', hasModel ? f(center.z) : '—', 'z'],
+		].forEach(([label, value, axis]) => {
+			const h = document.createElement('div');
+			h.className = 'pm__map-hero';
+			h.dataset.axis = axis;
+			h.innerHTML =
+				'<span class="pm__map-hero-label"></span>' +
+				'<span class="pm__map-hero-value"></span>';
+			h.querySelector('.pm__map-hero-label').textContent = label.toUpperCase();
+			h.querySelector('.pm__map-hero-value').textContent = value;
+			heroes.appendChild(h);
+		});
+		wrap.appendChild(heroes);
+
+		if (hasModel) {
+			const mag = Math.sqrt(center.x ** 2 + center.y ** 2 + center.z ** 2);
+			const centered = mag < 0.001;
+			const summary = document.createElement('div');
+			summary.className = 'pm__map-summary';
+			summary.innerHTML =
+				'<div class="pm__map-summary-item"><span class="pm__map-summary-label">OFFSET FROM ORIGIN</span><span class="pm__map-summary-value" data-v="mag"></span></div>' +
+				'<div class="pm__map-summary-item"><span class="pm__map-summary-label">CENTERED</span><span class="pm__map-summary-value" data-v="ctr"></span></div>';
+			summary.querySelector('[data-v="mag"]').textContent = f(mag);
+			summary.querySelector('[data-v="ctr"]').textContent = centered ? 'YES' : 'NO';
+			wrap.appendChild(summary);
+		}
 	}
 
 	_cycleEnum(row, delta) {
