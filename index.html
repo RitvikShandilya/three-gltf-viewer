@@ -15,7 +15,7 @@
 	<link rel="preconnect" href="https://fonts.googleapis.com" />
 	<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 	<link
-		href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@300;400;500;600&display=swap"
+		href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@300;400;500;600;700&family=Inter:wght@400;500;600;700;800;900&display=swap"
 		rel="stylesheet"
 	/>
 	<link rel="stylesheet" href="style.css" />
@@ -56,16 +56,20 @@
 	<section class="pm" aria-label="Settings Menu" aria-modal="false">
 		<div class="pm__backdrop" aria-hidden="true"></div>
 
-		<header class="pm__brand">
-			<span class="pm__brand-title">GLTF VIEWER</span>
-			<!-- Session chip: generic context badge modeled on Figma's
-			     Menu Badge. Populated with the loaded glTF filename
-			     by app.js; falls back to empty (hidden) before load. -->
-			<span class="pm__session" id="pm-session" aria-live="polite"></span>
-		</header>
+		<!-- Single header strip: brand-left | tabs-centered | meta-right.
+		     Mirrors the reference pause-menu header lockup where the brand
+		     and tab nav share one row instead of stacking vertically. -->
+		<header class="pm__header">
+			<div class="pm__brand">
+				<span class="pm__brand-title">GLTF VIEWER</span>
+				<!-- Session chip: filled white block (reference STORY/ONLINE
+				     selected-tab treatment). Populated with the loaded glTF
+				     filename by app.js; hidden when empty. -->
+				<span class="pm__session" id="pm-session" aria-live="polite"></span>
+			</div>
 
-		<header class="pm__topbar">
 			<nav class="pm__tabs" id="pm-tabs" role="tablist" aria-label="Menu sections"></nav>
+
 			<div class="pm__meta">
 				<div class="pm__swatches" role="radiogroup" aria-label="Accent color">
 					<button class="pm__swatch" data-accent="amber" aria-label="Amber accent" title="Amber"></button>
@@ -93,14 +97,27 @@
 		</footer>
 	</section>
 
-	<!-- Top-right control cluster: HUD sits to the LEFT of the MENU button, grouped as one coherent unit -->
+	<!-- Top-right control cluster: HUD sits to the LEFT, then the
+	     APPEARANCE button (standalone Character-Creator-style overlay
+	     for live model tuning), then the MENU button. All three are
+	     always visible once a model is loaded. -->
 	<div class="topbar-cluster" id="topbar-cluster">
 		<div class="hud" id="hud" role="group" aria-label="Performance HUD" aria-hidden="true" hidden></div>
+
+		<button class="cc__toggle" id="cc-toggle" type="button" aria-label="Open appearance editor" aria-expanded="false" aria-controls="cc-card">
+			<span>Appearance</span>
+		</button>
 
 		<button class="pm__toggle" id="pm-toggle" aria-label="Open settings menu">
 			<span>Menu</span>
 		</button>
 	</div>
+
+	<!-- Standalone Character-Creator card — floating overlay independent
+	     of the main settings menu. Mirrors /Users/ritvik/Downloads/ui/
+	     character.jsx structure. Toggled by .cc__toggle; its body is
+	     populated by viewer.js (_renderCcCard). -->
+	<aside class="cc" id="cc-card" aria-label="Appearance editor" aria-hidden="true" hidden></aside>
 
 	<!-- Toast notifications container (for errors/status) -->
 	<div class="pm__toasts" id="pm-toasts" aria-live="polite" aria-atomic="true"></div>

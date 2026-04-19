@@ -1617,6 +1617,11 @@ export class Viewer {
 					},
 				],
 			},
+			environment: {
+				label: 'ENVIRONMENT',
+				render: 'env-grid',
+				rows: [],
+			},
 			lighting: {
 				label: 'LIGHTING',
 				rows: [
@@ -2137,23 +2142,87 @@ export class Viewer {
 			btn.setAttribute('aria-label', `${section.label} section`);
 			btn.textContent = section.label;
 			btn.addEventListener('click', () => this._selectTab(key));
+			btn.addEventListener('mouseenter', () => window.AudioFX && window.AudioFX.hover());
 			tabsEl.appendChild(btn);
 		});
 	}
 
 	_selectTab(key) {
 		if (this.ui.activeTab === key) return;
-		this.ui.activeTab = key;
-		this.ui.activeRow = 0;
-		this._renderTabs();
-		this._renderRail();
-		this._renderPane();
+		if (window.AudioFX) window.AudioFX.tab();
+		// Reference pause-menu uses a 120ms opacity fade between tab bodies
+		// to avoid a hard content snap. Mirror that: fade out → swap content
+		// → fade back in. Re-render touches all three slots in one tick so
+		// the swap is atomic from the user's perspective.
+		const body = document.querySelector('.pm__body');
+		const swap = () => {
+			this.ui.activeTab = key;
+			this.ui.activeRow = 0;
+			this._renderTabs();
+			this._renderRail();
+			this._renderPane();
+		};
+		if (!body) {
+			swap();
+			return;
+		}
+		if (this._tabSwapTimer) clearTimeout(this._tabSwapTimer);
+		body.classList.add('pm__body--swapping');
+		this._tabSwapTimer = setTimeout(() => {
+			swap();
+			requestAnimationFrame(() =>
+				body.classList.remove('pm__body--swapping'),
+			);
+			this._tabSwapTimer = null;
+		}, 120);
+	}
+
+	/**
+	 * A tab is "full-bleed" when none of its rows need the pane's vertical
+	 * room for a showcase widget (map canvas, brief overview, asset grid,
+	 * camera-preset diagram, three.js stats DOM). Those tabs render the
+	 * rail as the entire content area — no separate pane editor — so the
+	 * inline controls on each row are not visually duplicated.
+	 */
+	_isFullBleedTab(tabKey) {
+		const SHOWCASE_TYPES = new Set([
+			'camera-preset',
+			'map',
+			'brief',
+			'asset',
+			'asset-summary',
+			'stats',
+		]);
+		const section = this.schema[tabKey];
+		if (!section) return false;
+		// Custom-render tabs (env grid, etc.) own their layout — they're
+		// full-bleed (no pane) but skip the centered max-width cap of plain
+		// settings tabs. We mark those with `.pm__body--showcase` instead.
+		if (section.render) return true;
+		return !section.rows.some((r) => SHOWCASE_TYPES.has(r.type));
+	}
+
+	_applyBodyLayout() {
+		const body = document.querySelector('.pm__body');
+		if (!body) return;
+		const section = this.schema[this.ui.activeTab];
+		const full = this._isFullBleedTab(this.ui.activeTab);
+		const showcase = !!(section && section.render);
+		body.classList.toggle('pm__body--full', full);
+		body.classList.toggle('pm__body--showcase', showcase);
 	}
 
 	_renderRail() {
 		const railEl = this.ui.railEl;
 		if (!railEl) return;
+		this._applyBodyLayout();
 		const section = this.schema[this.ui.activeTab];
+		// Custom-render tabs short-circuit the rail/row pipeline.
+		if (section && section.render === 'env-grid') {
+			railEl.innerHTML = '';
+			this._renderEnvTab(railEl);
+			return;
+		}
 		const rows = section.rows;
 		const query = (this.ui.railQuery || '').trim().toLowerCase();
 		railEl.innerHTML = '';
@@ -2222,27 +2291,25 @@ export class Viewer {
 				valueEl.classList.add('pm__row-icon');
 				valueEl.innerHTML = this._iconFor(row.icon);
 			} else if (row.type === 'bool') {
-				// Figma toggle: small framed checkbox, glyph visible when on.
-				// Uses currentColor so it inverts correctly on the focused row.
-				const on = !!(row.get ? row.get() : false);
-				valueEl.innerHTML = `
-					<span class="pm__row-toggle" data-on="${on ? 'true' : 'false'}" aria-hidden="true">
-						<span class="pm__row-toggle-glyph">\u2713</span>
-					</span>`;
-			} else if (row.type === 'enum' || row.type === 'num') {
-				// Horizontal selector spec: ◀ value ▶. Arrows are visually
-				// gated to the focused row via CSS (see .pm__row-inline-arrows).
-				const valueText = this._formatValue(row);
-				valueEl.classList.add('pm__row-inline-arrows');
-				valueEl.innerHTML =
-					`<span class="pm__row-inline-arrow" aria-hidden="true">\u25C0</span>` +
-					`<span class="pm__row-inline-value"></span>` +
-					`<span class="pm__row-inline-arrow" aria-hidden="true">\u25B6</span>`;
-				valueEl.querySelector('.pm__row-inline-value').textContent = valueText;
+				// Reference inline toggle: ● ON / ○ OFF — clickable directly
+				// without entering the pane. Click is independent of the row's
+				// own select handler (stopPropagation in handler below).
+				this._renderRailBool(valueEl, row, i);
+			} else if (row.type === 'num') {
+				// Reference inline slider: ◂ track ▸ value. Arrows nudge by
+				// step (or 1/20th of range when no step). Track shows fill.
+				this._renderRailNum(valueEl, row, i);
+			} else if (row.type === 'enum') {
+				// Reference inline pills (≤4 options) or arrow-cycler (>4).
+				this._renderRailEnum(valueEl, row, i);
+			} else if (row.type === 'color') {
+				// Reference color row: swatch + hex string.
+				this._renderRailColor(valueEl, row, i);
 			} else {
 				valueEl.textContent = this._formatValue(row);
 			}
 			btn.addEventListener('click', () => this._selectRow(i));
+			btn.addEventListener('mouseenter', () => window.AudioFX && window.AudioFX.hover());
 			railEl.appendChild(btn);
 		});
 
@@ -2338,6 +2405,485 @@ export class Viewer {
 		return v;
 	}
 
+	/* =========================================================
+	 * Inline rail-row controls — reference Settings-tab pattern.
+	 * Each row's right-side slot renders a fully-functional control
+	 * (toggle/slider/pills/color) instead of just a value preview.
+	 * Clicks on inline controls call row.set() directly without
+	 * forcing a pane navigation, so the rail IS the editor.
+	 * ========================================================= */
+
+	_renderRailBool(valueEl, row, i) {
+		const on = !!(row.get ? row.get() : false);
+		valueEl.classList.add('pm__row-bool');
+		valueEl.dataset.on = on ? 'true' : 'false';
+		valueEl.innerHTML =
+			`<span class="pm__row-bool-dot" aria-hidden="true">${on ? '\u25CF' : '\u25CB'}</span>` +
+			`<span class="pm__row-bool-text">${on ? 'ON' : 'OFF'}</span>`;
+		// Bind once; valueEl persists across re-renders so a fresh listener
+		// each call would accumulate and toggle multiple times per click.
+		if (valueEl._boolWired) return;
+		valueEl._boolWired = true;
+		valueEl.addEventListener('click', (e) => {
+			e.stopPropagation();
+			if (window.AudioFX) window.AudioFX.toggle();
+			if (row.set) row.set(!row.get());
+			this._renderRailBool(valueEl, row, i);
+			this._renderPane();
+		});
+	}
+
+	_renderRailNum(valueEl, row, i) {
+		const v = row.get ? row.get() : 0;
+		const min = typeof row.min === 'number' ? row.min : 0;
+		const max = typeof row.max === 'number' ? row.max : 1;
+		const valueText = this._formatValue(row);
+		valueEl.classList.add('pm__row-num');
+		valueEl.innerHTML =
+			`<button class="pm__row-arrow" data-step="-1" tabindex="-1" aria-label="Decrease">\u25C2</button>` +
+			`<span class="pm__row-track" aria-hidden="true"><span class="pm__row-fill"></span></span>` +
+			`<button class="pm__row-arrow" data-step="+1" tabindex="-1" aria-label="Increase">\u25B8</button>` +
+			`<span class="pm__row-num-val"></span>`;
+		const fill = valueEl.querySelector('.pm__row-fill');
+		const numVal = valueEl.querySelector('.pm__row-num-val');
+		const pct = max > min ? Math.max(0, Math.min(1, (v - min) / (max - min))) : 0;
+		fill.style.width = `${pct * 100}%`;
+		numVal.textContent = valueText;
+		const nudge = (dir) => {
+			const cur = row.get ? row.get() : 0;
+			const step = typeof row.step === 'number' && row.step > 0 ? row.step : (max - min) / 20;
+			const next = Math.max(min, Math.min(max, cur + dir * step));
+			if (row.set) row.set(next);
+			if (window.AudioFX) window.AudioFX.toggle();
+			this._renderRailNum(valueEl, row, i);
+			this._renderPane();
+		};
+		valueEl.querySelectorAll('.pm__row-arrow').forEach((btn) => {
+			btn.addEventListener('click', (e) => {
+				e.stopPropagation();
+				nudge(btn.dataset.step === '-1' ? -1 : 1);
+			});
+		});
+	}
+
+	_renderRailEnum(valueEl, row, i) {
+		const options = Array.isArray(row.options) ? row.options : null;
+		const current = row.get ? row.get() : (options && options[0]);
+		// Pill list when 2-4 options; arrow cycler when more.
+		if (options && options.length >= 2 && options.length <= 4) {
+			valueEl.classList.add('pm__row-pills');
+			valueEl.innerHTML = options
+				.map(
+					(o) =>
+						`<button class="pm__row-pill" data-opt="${this._escAttr(o)}" data-selected="${String(o) === String(current) ? 'true' : 'false'}" tabindex="-1">${String(o).toUpperCase()}</button>`,
+				)
+				.join('');
+			valueEl.querySelectorAll('.pm__row-pill').forEach((pill) => {
+				pill.addEventListener('click', (e) => {
+					e.stopPropagation();
+					if (window.AudioFX) window.AudioFX.toggle();
+					if (row.set) row.set(pill.dataset.opt);
+					this._renderRailEnum(valueEl, row, i);
+					this._renderPane();
+				});
+			});
+		} else {
+			valueEl.classList.add('pm__row-num');
+			valueEl.innerHTML =
+				`<button class="pm__row-arrow" data-step="-1" tabindex="-1" aria-label="Previous">\u25C2</button>` +
+				`<span class="pm__row-num-val"></span>` +
+				`<button class="pm__row-arrow" data-step="+1" tabindex="-1" aria-label="Next">\u25B8</button>`;
+			valueEl.querySelector('.pm__row-num-val').textContent = this._formatValue(row);
+			const cycle = (dir) => {
+				if (!options) return;
+				const idx = options.indexOf(row.get ? row.get() : options[0]);
+				const next = options[(idx + dir + options.length) % options.length];
+				if (row.set) row.set(next);
+				if (window.AudioFX) window.AudioFX.toggle();
+				this._renderRailEnum(valueEl, row, i);
+				this._renderPane();
+			};
+			valueEl.querySelectorAll('.pm__row-arrow').forEach((btn) => {
+				btn.addEventListener('click', (e) => {
+					e.stopPropagation();
+					cycle(btn.dataset.step === '-1' ? -1 : 1);
+				});
+			});
+		}
+	}
+
+	_renderRailColor(valueEl, row, i) {
+		const v = String(row.get ? row.get() : '#000000').toUpperCase();
+		valueEl.classList.add('pm__row-color');
+		valueEl.innerHTML =
+			`<label class="pm__row-color-swatch" style="background:${v}">` +
+			`<input type="color" class="pm__row-color-input" value="${v}" tabindex="-1" aria-label="${this._escAttr(row.label)} color">` +
+			`</label>` +
+			`<span class="pm__row-color-hex">${v}</span>`;
+		const input = valueEl.querySelector('.pm__row-color-input');
+		const swatch = valueEl.querySelector('.pm__row-color-swatch');
+		const hex = valueEl.querySelector('.pm__row-color-hex');
+		input.addEventListener('click', (e) => e.stopPropagation());
+		input.addEventListener('input', (e) => {
+			const next = String(e.target.value).toUpperCase();
+			if (row.set) row.set(next);
+			swatch.style.background = next;
+			hex.textContent = next;
+			this._renderPane();
+		});
+	}
+
+	_escAttr(s) {
+		return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({
+			'&': '&amp;',
+			'<': '&lt;',
+			'>': '&gt;',
+			'"': '&quot;',
+			"'": '&#39;',
+		})[c]);
+	}
+
+	/* =========================================================
+	 * Environment tab — Brief-style card grid + detail panel.
+	 * Mirrors the reference pause-menu's BriefTab layout:
+	 *   - Top header: orange bar + kicker + big title + page indicator
+	 *   - 6-column card grid with stripe-pattern art, status badges
+	 *   - Below grid: 2/1 detail panel (info + format/source + APPLY)
+	 * Cards write directly to state.environment + updateEnvironment().
+	 * ========================================================= */
+
+	_renderEnvTab(railEl) {
+		const envs = environments;
+		const current = this.state.environment;
+		const curIdx = Math.max(
+			0,
+			envs.findIndex((e) => e.name === current),
+		);
+		const cur = envs[curIdx] || envs[0];
+
+		railEl.innerHTML = `
+			<section class="pm__envtab">
+				<header class="pm__envtab-head">
+					<span class="pm__envtab-bar" aria-hidden="true"></span>
+					<div class="pm__envtab-titles">
+						<div class="pm__envtab-kicker">SCENE</div>
+						<h2 class="pm__envtab-title">ENVIRONMENT</h2>
+					</div>
+					<div class="pm__envtab-page" aria-label="Selected environment index">${curIdx + 1} / ${envs.length}</div>
+				</header>
+				<div class="pm__envtab-grid" role="radiogroup" aria-label="Environments"></div>
+				<div class="pm__envtab-detail"></div>
+			</section>
+		`;
+
+		const gridEl = railEl.querySelector('.pm__envtab-grid');
+		const detailEl = railEl.querySelector('.pm__envtab-detail');
+
+		envs.forEach((env, i) => {
+			const isActive = i === curIdx;
+			const isLocal = !env.path;
+			const status = isActive
+				? 'ACTIVE'
+				: isLocal
+					? 'BUILT-IN'
+					: 'AVAILABLE';
+			const stripe = this._envStripeColor(env.id || env.name);
+			const stripeAngle = isLocal ? 45 : 135;
+
+			const card = document.createElement('button');
+			card.className = 'pm__envcard' + (isActive ? ' pm__envcard--active' : '');
+			card.type = 'button';
+			card.setAttribute('role', 'radio');
+			card.setAttribute('aria-checked', isActive ? 'true' : 'false');
+			card.setAttribute('aria-label', `${env.name} environment`);
+			card.style.setProperty('--envcard-stripe', stripe);
+			card.style.setProperty('--envcard-stripe-angle', `${stripeAngle}deg`);
+			card.dataset.envId = env.id || 'none';
+			card.dataset.status = status.toLowerCase();
+			card.innerHTML =
+				`<div class="pm__envcard-art" aria-hidden="true"></div>` +
+				`<div class="pm__envcard-veil" aria-hidden="true"></div>` +
+				(isActive ? `<span class="pm__envcard-newbadge">ACTIVE</span>` : '') +
+				`<span class="pm__envcard-status">${status}</span>` +
+				`<span class="pm__envcard-title">${this._escHtml(env.name).toUpperCase()}</span>` +
+				`<span class="pm__envcard-sub">${isLocal ? 'BUILT-IN' : 'POLY HAVEN · 4K'}</span>`;
+			card.addEventListener('click', () => {
+				if (this.state.environment === env.name) return;
+				if (window.AudioFX) window.AudioFX.select();
+				this.state.environment = env.name;
+				this.updateEnvironment();
+				// Re-render the tab so the active card / detail update.
+				this._renderEnvTab(railEl);
+			});
+			card.addEventListener(
+				'mouseenter',
+				() => window.AudioFX && window.AudioFX.hover(),
+			);
+			gridEl.appendChild(card);
+		});
+
+		const isCurLocal = !cur.path;
+		detailEl.innerHTML = `
+			<div class="pm__envtab-detail-left">
+				<div class="pm__envtab-kicker pm__envtab-kicker--small">CURRENT ENVIRONMENT</div>
+				<h3 class="pm__envtab-detail-title">${this._escHtml(cur.name).toUpperCase()}</h3>
+				<div class="pm__envtab-detail-sub">${isCurLocal ? 'BUILT-IN' : 'POLY HAVEN · 4K HDRI'}</div>
+				<p class="pm__envtab-detail-desc">${this._envDescription(cur)}</p>
+			</div>
+			<div class="pm__envtab-detail-right">
+				<div class="pm__envtab-stat">
+					<div class="pm__envtab-stat-label">FORMAT</div>
+					<div class="pm__envtab-stat-val">${(cur.format || 'NONE').replace('.', '').toUpperCase()}</div>
+				</div>
+				<div class="pm__envtab-stat">
+					<div class="pm__envtab-stat-label">SOURCE</div>
+					<div class="pm__envtab-stat-val">${isCurLocal ? 'LOCAL' : 'CDN STREAM'}</div>
+				</div>
+				<button class="pm__envtab-apply" type="button" aria-label="Reload environment">
+					${cur.path ? 'RELOAD' : 'ACTIVE'}
+				</button>
+			</div>
+		`;
+		const applyBtn = detailEl.querySelector('.pm__envtab-apply');
+		if (applyBtn) {
+			applyBtn.addEventListener('click', () => {
+				if (window.AudioFX) window.AudioFX.select();
+				this.updateEnvironment();
+			});
+			applyBtn.addEventListener(
+				'mouseenter',
+				() => window.AudioFX && window.AudioFX.hover(),
+			);
+		}
+	}
+
+	/* =========================================================
+	 * Standalone Character-Creator card — floating overlay that lives
+	 * outside the main pause menu. Toggled by .cc__toggle; mirrors the
+	 * reference /Users/ritvik/Downloads/ui/character.jsx structure
+	 * (kicker title bar + section nav arrows + 34px row stack with
+	 * white-gradient selection + help text bar).
+	 *
+	 * Rows are resolved by key from the display + lighting tabs at
+	 * render time so we never duplicate row.set / row.get definitions.
+	 * Section nav, opening, and toggling are independent of the pause
+	 * menu — the card stays usable while the menu is closed and
+	 * settings edits propagate live to the 3D scene.
+	 * ========================================================= */
+
+	_ccSections() {
+		return [
+			{
+				id: 'presentation',
+				label: 'PRESENTATION',
+				help: 'Toggle rendering modes and overlays.',
+				from: 'display',
+				rowKeys: [
+					'background',
+					'wireframe',
+					'skeleton',
+					'grid',
+					'ground',
+					'pointSize',
+					'bgColor',
+				],
+			},
+			{
+				id: 'lighting',
+				label: 'LIGHTING',
+				help: 'Adjust scene lighting and color grading.',
+				from: 'lighting',
+				rowKeys: [
+					'toneMapping',
+					'exposure',
+					'punctualLights',
+					'ambientIntensity',
+					'ambientColor',
+					'directIntensity',
+					'directColor',
+				],
+			},
+			{
+				id: 'postfx',
+				label: 'POST-FX',
+				help: 'Cinematic post-processing effects.',
+				from: 'lighting',
+				rowKeys: [
+					'bloom',
+					'bloomStrength',
+					'bloomThreshold',
+					'bloomRadius',
+					'ssao',
+					'ssaoStrength',
+					'filmGrain',
+					'filmGrainIntensity',
+				],
+			},
+		];
+	}
+
+	_renderCcCard() {
+		const card = document.getElementById('cc-card');
+		if (!card) return;
+		const sections = this._ccSections();
+		if (this.ui.ccSection == null) this.ui.ccSection = 0;
+		const idx = Math.max(0, Math.min(sections.length - 1, this.ui.ccSection));
+		const cur = sections[idx];
+
+		const resolveRows = (s) => {
+			const src = this.schema && this.schema[s.from];
+			if (!src) return [];
+			const byKey = new Map(src.rows.map((r) => [r.key, r]));
+			return s.rowKeys.map((k) => byKey.get(k)).filter(Boolean);
+		};
+		const rows = resolveRows(cur);
+
+		card.innerHTML = `
+			<header class="cc__title">
+				<span class="cc__title-bar" aria-hidden="true"></span>
+				<div class="cc__title-text">
+					<div class="cc__title-kicker">MODEL</div>
+					<h2 class="cc__title-display">APPEARANCE</h2>
+				</div>
+				<button class="cc__close" type="button" aria-label="Close appearance editor">
+					<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" width="18" height="18">
+						<path d="M5 5 L19 19 M19 5 L5 19" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square" />
+					</svg>
+				</button>
+			</header>
+			<div class="cc__subhead">
+				<span class="cc__section-label">${this._escHtml(cur.label)}</span>
+				<div class="cc__nav">
+					<button class="cc__nav-arrow" type="button" data-dir="-1" aria-label="Previous section">\u25C2</button>
+					<span class="cc__counter">${idx + 1}/${sections.length}</span>
+					<button class="cc__nav-arrow" type="button" data-dir="+1" aria-label="Next section">\u25B8</button>
+				</div>
+			</div>
+			<div class="cc__rows" role="list"></div>
+			<footer class="cc__help">
+				<span class="cc__help-text">${this._escHtml(cur.help)}</span>
+				<span class="cc__help-icon" aria-hidden="true">i</span>
+			</footer>
+		`;
+
+		const rowsEl = card.querySelector('.cc__rows');
+		rows.forEach((row, i) => {
+			const btn = document.createElement('button');
+			btn.className = 'cc__row pm__row';
+			btn.type = 'button';
+			btn.setAttribute('role', 'listitem');
+			btn.dataset.row = i;
+			btn.dataset.type = row.type || '';
+			btn.innerHTML =
+				`<span class="pm__row-label cc__row-label"></span>` +
+				`<span class="pm__row-value cc__row-value"></span>`;
+			btn.querySelector('.cc__row-label').textContent = String(row.label).toUpperCase();
+			const valueEl = btn.querySelector('.cc__row-value');
+			if (row.type === 'bool') this._renderRailBool(valueEl, row, i);
+			else if (row.type === 'num') this._renderRailNum(valueEl, row, i);
+			else if (row.type === 'enum') this._renderRailEnum(valueEl, row, i);
+			else if (row.type === 'color') this._renderRailColor(valueEl, row, i);
+			else valueEl.textContent = this._formatValue(row);
+			btn.addEventListener('mouseenter', () => window.AudioFX && window.AudioFX.hover());
+			rowsEl.appendChild(btn);
+		});
+
+		card.querySelectorAll('.cc__nav-arrow').forEach((btn) => {
+			btn.addEventListener('click', () => {
+				if (window.AudioFX) window.AudioFX.tab();
+				const dir = btn.dataset.dir === '-1' ? -1 : 1;
+				this.ui.ccSection = (idx + dir + sections.length) % sections.length;
+				this._renderCcCard();
+			});
+			btn.addEventListener(
+				'mouseenter',
+				() => window.AudioFX && window.AudioFX.hover(),
+			);
+		});
+
+		const closeBtn = card.querySelector('.cc__close');
+		if (closeBtn) {
+			closeBtn.addEventListener('click', () => this._setCcOpen(false));
+			closeBtn.addEventListener(
+				'mouseenter',
+				() => window.AudioFX && window.AudioFX.hover(),
+			);
+		}
+	}
+
+	_setCcOpen(open) {
+		const card = document.getElementById('cc-card');
+		const toggle = document.getElementById('cc-toggle');
+		const wasOpen = document.body.dataset.ccOpen === 'true';
+		document.body.dataset.ccOpen = open ? 'true' : 'false';
+		if (card) {
+			card.hidden = !open;
+			card.setAttribute('aria-hidden', open ? 'false' : 'true');
+		}
+		if (toggle) {
+			toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+		}
+		if (window.AudioFX && wasOpen !== !!open) {
+			open ? window.AudioFX.select() : window.AudioFX.back();
+		}
+		if (open) this._renderCcCard();
+	}
+
+	_wireCcToggle() {
+		if (this._ccWired) return;
+		this._ccWired = true;
+		const toggle = document.getElementById('cc-toggle');
+		if (!toggle) return;
+		toggle.addEventListener('click', () => {
+			const isOpen = document.body.dataset.ccOpen === 'true';
+			this._setCcOpen(!isOpen);
+		});
+		toggle.addEventListener(
+			'mouseenter',
+			() => window.AudioFX && window.AudioFX.hover(),
+		);
+	}
+
+	_envStripeColor(seed) {
+		// Deterministic accent per env so cards read as distinct without
+		// pulling actual HDRI thumbnails (keeps payload light).
+		const palette = [
+			'#5db6e5',
+			'#ffad36',
+			'#8466e2',
+			'#72cc72',
+			'#f98a8a',
+			'#f79f7b',
+			'#f0c850',
+			'#65b4d4',
+			'#abedab',
+			'#ffa357',
+		];
+		let h = 0;
+		const s = String(seed || '');
+		for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+		return palette[h % palette.length];
+	}
+
+	_envDescription(env) {
+		if (!env.path) {
+			if (env.id === 'neutral') {
+				return 'Soft neutral lighting from a procedural room environment. Best for inspecting materials without scene bias.';
+			}
+			return 'No environment map. Lighting comes only from the punctual lights configured in the Lighting tab.';
+		}
+		return 'High dynamic range image streamed from Poly Haven at 4K resolution. Provides realistic ambient lighting and reflections for PBR materials.';
+	}
+
+	_escHtml(s) {
+		return String(s == null ? '' : s).replace(/[&<>"]/g, (c) => ({
+			'&': '&amp;',
+			'<': '&lt;',
+			'>': '&gt;',
+			'"': '&quot;',
+		})[c]);
+	}
+
 	/**
 	 * Returns inline SVG markup for a camera-preset icon key.
 	 * Icons use `currentColor` + 1.2px stroke so they inherit row color
@@ -2408,6 +2954,7 @@ export class Viewer {
 	}
 
 	_selectRow(i) {
+		if (window.AudioFX && this.ui.activeRow !== i) window.AudioFX.select();
 		this.ui.activeRow = i;
 		const rows = this.ui.railEl.querySelectorAll('.pm__row');
 		rows.forEach((el, idx) => el.setAttribute('aria-selected', idx === i ? 'true' : 'false'));
@@ -4784,18 +5331,33 @@ export class Viewer {
 	}
 
 	_refreshRowValueOnly() {
-		const row = this.schema[this.ui.activeTab].rows[this.ui.activeRow];
-		const sel = `[data-row="${this.ui.activeRow}"] .pm__row-value`;
+		const i = this.ui.activeRow;
+		const row = this.schema[this.ui.activeTab].rows[i];
+		const sel = `[data-row="${i}"] .pm__row-value`;
 		const el = this.ui.railEl.querySelector(sel);
 		if (!el || !row) return;
+		// Inline controls have nested DOM — re-render via the per-type
+		// builder so the toggle dot, slider fill, pill selection, or color
+		// swatch update in lockstep with pane edits.
 		if (row.icon) {
-			// Row value slot hosts an inline SVG — keep it, just flash.
+			// Inline SVG host — leave structure alone, just flash.
+		} else if (row.type === 'bool') {
+			el.className = 'pm__row-value';
+			this._renderRailBool(el, row, i);
+		} else if (row.type === 'num') {
+			el.className = 'pm__row-value';
+			this._renderRailNum(el, row, i);
+		} else if (row.type === 'enum') {
+			el.className = 'pm__row-value';
+			this._renderRailEnum(el, row, i);
+		} else if (row.type === 'color') {
+			el.className = 'pm__row-value';
+			this._renderRailColor(el, row, i);
 		} else {
 			el.textContent = this._formatValue(row);
 		}
 		// Flash amber for 180ms then fade back.
 		el.classList.remove('pm__row-value--flash');
-		// Force reflow so re-adding the class restarts the transition.
 		void el.offsetWidth;
 		el.classList.add('pm__row-value--flash');
 		if (this._rowFlashTimer) clearTimeout(this._rowFlashTimer);
@@ -4807,22 +5369,64 @@ export class Viewer {
 
 	_wireGlobalUI() {
 		document.querySelectorAll('.pm__swatch').forEach((s) => {
-			s.addEventListener('click', () => this._setAccent(s.dataset.accent));
+			s.addEventListener('click', () => {
+				if (window.AudioFX) window.AudioFX.toggle();
+				this._setAccent(s.dataset.accent);
+			});
+			s.addEventListener('mouseenter', () => window.AudioFX && window.AudioFX.hover());
 		});
 		const toggle = document.getElementById('pm-toggle');
 		if (toggle) {
 			toggle.addEventListener('click', () => this._setMenuOpen(true));
+			toggle.addEventListener('mouseenter', () => window.AudioFX && window.AudioFX.hover());
 		}
 		// Mobile close (X) button — ESC-equivalent for touch devices.
 		const closeBtn = document.getElementById('pm-close');
 		if (closeBtn && !closeBtn._wired) {
 			closeBtn._wired = true;
 			closeBtn.addEventListener('click', () => this._setMenuOpen(false));
+			closeBtn.addEventListener('mouseenter', () => window.AudioFX && window.AudioFX.hover());
 		}
 		const share = document.getElementById('pm-share');
 		if (share && !share._wired) {
 			share._wired = true;
-			share.addEventListener('click', () => this._copyShareLink(share));
+			share.addEventListener('click', () => {
+				if (window.AudioFX) window.AudioFX.select();
+				this._copyShareLink(share);
+			});
+			share.addEventListener('mouseenter', () => window.AudioFX && window.AudioFX.hover());
+		}
+		// Standalone Character-Creator overlay (Appearance card).
+		this._wireCcToggle();
+		// Footer prompt buttons — delegated hover/click feedback.
+		const actionsEl = document.getElementById('pm-actions');
+		if (actionsEl && !actionsEl._wired) {
+			actionsEl._wired = true;
+			actionsEl.addEventListener(
+				'mouseover',
+				(e) => {
+					const btn = e.target && e.target.closest && e.target.closest('.pm__action');
+					if (btn && e.target === btn) {
+						if (window.AudioFX) window.AudioFX.hover();
+					} else if (btn && !btn._hovered) {
+						btn._hovered = true;
+						if (window.AudioFX) window.AudioFX.hover();
+					}
+				},
+				true,
+			);
+			actionsEl.addEventListener(
+				'mouseout',
+				(e) => {
+					const btn = e.target && e.target.closest && e.target.closest('.pm__action');
+					if (btn) btn._hovered = false;
+				},
+				true,
+			);
+			actionsEl.addEventListener('click', (e) => {
+				const btn = e.target && e.target.closest && e.target.closest('.pm__action');
+				if (btn && window.AudioFX) window.AudioFX.select();
+			});
 		}
 		if (!this._keyHandler) {
 			this._keyHandler = (e) => this._onKey(e);
@@ -5007,7 +5611,22 @@ export class Viewer {
 	}
 
 	_setMenuOpen(open) {
+		const wasOpen = document.body.dataset.menuOpen === 'true';
 		document.body.dataset.menuOpen = open ? 'true' : 'false';
+		// Play audio feedback on actual state transitions only (not redundant
+		// calls). Centralized here so every entry point — toggle button, ESC
+		// key, close (X) button, contextual close action — gets the same sound.
+		if (window.AudioFX && wasOpen !== !!open) {
+			open ? window.AudioFX.select() : window.AudioFX.back();
+		}
+		// When the pause menu closes and the standalone CC overlay is open,
+		// refresh it so any settings the user changed via the menu reflect
+		// in the appearance card.
+		if (!open && document.body.dataset.ccOpen === 'true') {
+			try {
+				this._renderCcCard();
+			} catch (e) {}
+		}
 		const toggle = document.getElementById('pm-toggle');
 		if (toggle) toggle.hidden = !!open;
 		// On narrow/mobile widths the menu takes the full viewport, so
