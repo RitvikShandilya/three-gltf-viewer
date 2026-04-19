@@ -3656,137 +3656,129 @@ export class Viewer {
 			return;
 		}
 
-		const cols = document.createElement('div');
-		cols.className = 'pm__brief-cols';
-
-		const heroStats = [
-			{ label: 'Vertices', value: data.stats.vertices.toLocaleString() },
-			{ label: 'Triangles', value: data.stats.triangles.toLocaleString() },
-			{ label: 'Materials', value: String(data.stats.materials) },
-			{ label: 'Textures', value: String(data.stats.textures) },
-			{ label: 'Animations', value: String(data.stats.animations) },
-			{ label: 'File Size', value: this._formatBytes(data.stats.bytes) },
-		];
-
-		const left = document.createElement('div');
-		left.className = 'pm__brief-col';
-		left.setAttribute('data-section', 'hero');
-		left.setAttribute('data-active', view === 'overview' ? 'true' : 'false');
-		left.innerHTML = `<div class="pm__brief-col-title">HERO STATS</div>`;
-		const heroGrid = document.createElement('div');
-		heroGrid.className = 'pm__brief-hero-grid';
-		heroStats.forEach(({ label, value }) => {
-			const cell = document.createElement('div');
-			cell.className = 'pm__brief-hero-cell';
-			cell.innerHTML = `
-				<span class="pm__brief-hero-label"></span>
-				<span class="pm__brief-hero-value"></span>
+		if (view === 'overview') {
+			const heroStats = [
+				{ label: 'Vertices', value: data.stats.vertices.toLocaleString() },
+				{ label: 'Triangles', value: data.stats.triangles.toLocaleString() },
+				{ label: 'Materials', value: String(data.stats.materials) },
+				{ label: 'Textures', value: String(data.stats.textures) },
+				{ label: 'Animations', value: String(data.stats.animations) },
+				{ label: 'File Size', value: this._formatBytes(data.stats.bytes) },
+			];
+			const col = document.createElement('div');
+			col.className = 'pm__brief-col';
+			col.setAttribute('data-active', 'true');
+			col.innerHTML = `<div class="pm__brief-col-title">HERO STATS</div>`;
+			const grid = document.createElement('div');
+			grid.className = 'pm__brief-hero-grid';
+			heroStats.forEach(({ label, value }) => {
+				const cell = document.createElement('div');
+				cell.className = 'pm__brief-hero-cell';
+				cell.innerHTML = `
+					<span class="pm__brief-hero-label"></span>
+					<span class="pm__brief-hero-value"></span>
+				`;
+				cell.querySelector('.pm__brief-hero-label').textContent = label.toUpperCase();
+				cell.querySelector('.pm__brief-hero-value').textContent = value;
+				grid.appendChild(cell);
+			});
+			col.appendChild(grid);
+			shell.appendChild(col);
+		} else if (view === 'metadata') {
+			const col = document.createElement('div');
+			col.className = 'pm__brief-col';
+			col.setAttribute('data-active', 'true');
+			col.innerHTML = `<div class="pm__brief-col-title">METADATA</div>`;
+			const list = document.createElement('dl');
+			list.className = 'pm__brief-meta';
+			const metaRows = [
+				['Generator', data.asset.generator],
+				['Version', data.asset.version],
+				['Copyright', data.asset.copyright],
+				['Extensions', data.asset.extensions],
+			];
+			metaRows.forEach(([k, v]) => {
+				const dt = document.createElement('dt');
+				dt.textContent = String(k).toUpperCase();
+				const dd = document.createElement('dd');
+				dd.textContent = String(v);
+				list.appendChild(dt);
+				list.appendChild(dd);
+			});
+			col.appendChild(list);
+			shell.appendChild(col);
+		} else if (view === 'hierarchy') {
+			const sec = document.createElement('section');
+			sec.className = 'pm__brief-section';
+			sec.setAttribute('data-active', 'true');
+			sec.innerHTML = `
+				<div class="pm__brief-section-head">
+					<span class="pm__brief-section-title">NODES</span>
+					<span class="pm__brief-section-count"></span>
+				</div>
 			`;
-			cell.querySelector('.pm__brief-hero-label').textContent = label.toUpperCase();
-			cell.querySelector('.pm__brief-hero-value').textContent = value;
-			heroGrid.appendChild(cell);
-		});
-		left.appendChild(heroGrid);
-		cols.appendChild(left);
-
-		const right = document.createElement('div');
-		right.className = 'pm__brief-col';
-		right.setAttribute('data-section', 'metadata');
-		right.setAttribute('data-active', view === 'metadata' ? 'true' : 'false');
-		right.innerHTML = `<div class="pm__brief-col-title">METADATA</div>`;
-		const metaList = document.createElement('dl');
-		metaList.className = 'pm__brief-meta';
-		const metaRows = [
-			['Generator', data.asset.generator],
-			['Version', data.asset.version],
-			['Copyright', data.asset.copyright],
-			['Extensions', data.asset.extensions],
-		];
-		metaRows.forEach(([k, v]) => {
-			const dt = document.createElement('dt');
-			dt.textContent = String(k).toUpperCase();
-			const dd = document.createElement('dd');
-			dd.textContent = String(v);
-			metaList.appendChild(dt);
-			metaList.appendChild(dd);
-		});
-		right.appendChild(metaList);
-		cols.appendChild(right);
-
-		shell.appendChild(cols);
-
-		const nodesSec = document.createElement('section');
-		nodesSec.className = 'pm__brief-section';
-		nodesSec.setAttribute('data-section', 'hierarchy');
-		nodesSec.setAttribute('data-active', view === 'hierarchy' ? 'true' : 'false');
-		nodesSec.innerHTML = `
-			<div class="pm__brief-section-head">
-				<span class="pm__brief-section-title">NODES</span>
-				<span class="pm__brief-section-count"></span>
-			</div>
-		`;
-		nodesSec.querySelector('.pm__brief-section-count').textContent =
-			`${data.nodes.length} / ${data.nodeTotal}`;
-		const tree = document.createElement('ul');
-		tree.className = 'pm__brief-tree';
-		data.nodes.forEach((n) => {
-			const li = document.createElement('li');
-			li.className = 'pm__brief-tree-item';
-			li.style.setProperty('--indent', String(Math.min(n.depth, 8)));
-			li.innerHTML = `
-				<span class="pm__brief-tree-branch" aria-hidden="true"></span>
-				<span class="pm__brief-tree-name"></span>
-				<span class="pm__brief-tree-type"></span>
+			sec.querySelector('.pm__brief-section-count').textContent =
+				`${data.nodes.length} / ${data.nodeTotal}`;
+			const tree = document.createElement('ul');
+			tree.className = 'pm__brief-tree';
+			data.nodes.forEach((n) => {
+				const li = document.createElement('li');
+				li.className = 'pm__brief-tree-item';
+				li.style.setProperty('--indent', String(Math.min(n.depth, 8)));
+				li.innerHTML = `
+					<span class="pm__brief-tree-branch" aria-hidden="true"></span>
+					<span class="pm__brief-tree-name"></span>
+					<span class="pm__brief-tree-type"></span>
+				`;
+				li.querySelector('.pm__brief-tree-name').textContent = n.name;
+				li.querySelector('.pm__brief-tree-type').textContent = n.type;
+				tree.appendChild(li);
+			});
+			if (!data.nodes.length) {
+				const li = document.createElement('li');
+				li.className = 'pm__brief-tree-item pm__empty';
+				li.textContent = 'No nodes in scene.';
+				tree.appendChild(li);
+			}
+			sec.appendChild(tree);
+			shell.appendChild(sec);
+		} else if (view === 'materials') {
+			const sec = document.createElement('section');
+			sec.className = 'pm__brief-section';
+			sec.setAttribute('data-active', 'true');
+			sec.innerHTML = `
+				<div class="pm__brief-section-head">
+					<span class="pm__brief-section-title">MATERIALS</span>
+					<span class="pm__brief-section-count"></span>
+				</div>
 			`;
-			li.querySelector('.pm__brief-tree-name').textContent = n.name;
-			li.querySelector('.pm__brief-tree-type').textContent = n.type;
-			tree.appendChild(li);
-		});
-		if (!data.nodes.length) {
-			const li = document.createElement('li');
-			li.className = 'pm__brief-tree-item pm__empty';
-			li.textContent = 'No nodes in scene.';
-			tree.appendChild(li);
+			sec.querySelector('.pm__brief-section-count').textContent = String(
+				data.materials.length,
+			);
+			const swatches = document.createElement('div');
+			swatches.className = 'pm__brief-swatches';
+			data.materials.forEach((m) => {
+				const sw = document.createElement('div');
+				sw.className = 'pm__brief-swatch';
+				sw.innerHTML = `
+					<span class="pm__brief-swatch-chip"></span>
+					<span class="pm__brief-swatch-name"></span>
+					<span class="pm__brief-swatch-hex"></span>
+				`;
+				sw.querySelector('.pm__brief-swatch-chip').style.background = m.hex;
+				sw.querySelector('.pm__brief-swatch-name').textContent = m.name;
+				sw.querySelector('.pm__brief-swatch-hex').textContent = m.hex;
+				swatches.appendChild(sw);
+			});
+			if (!data.materials.length) {
+				const empty = document.createElement('div');
+				empty.className = 'pm__empty';
+				empty.textContent = 'No materials.';
+				swatches.appendChild(empty);
+			}
+			sec.appendChild(swatches);
+			shell.appendChild(sec);
 		}
-		nodesSec.appendChild(tree);
-		shell.appendChild(nodesSec);
-
-		const matsSec = document.createElement('section');
-		matsSec.className = 'pm__brief-section';
-		matsSec.setAttribute('data-section', 'materials');
-		matsSec.setAttribute('data-active', view === 'materials' ? 'true' : 'false');
-		matsSec.innerHTML = `
-			<div class="pm__brief-section-head">
-				<span class="pm__brief-section-title">MATERIALS</span>
-				<span class="pm__brief-section-count"></span>
-			</div>
-		`;
-		matsSec.querySelector('.pm__brief-section-count').textContent = String(
-			data.materials.length,
-		);
-		const swatches = document.createElement('div');
-		swatches.className = 'pm__brief-swatches';
-		data.materials.forEach((m) => {
-			const sw = document.createElement('div');
-			sw.className = 'pm__brief-swatch';
-			sw.innerHTML = `
-				<span class="pm__brief-swatch-chip"></span>
-				<span class="pm__brief-swatch-name"></span>
-				<span class="pm__brief-swatch-hex"></span>
-			`;
-			sw.querySelector('.pm__brief-swatch-chip').style.background = m.hex;
-			sw.querySelector('.pm__brief-swatch-name').textContent = m.name;
-			sw.querySelector('.pm__brief-swatch-hex').textContent = m.hex;
-			swatches.appendChild(sw);
-		});
-		if (!data.materials.length) {
-			const empty = document.createElement('div');
-			empty.className = 'pm__empty';
-			empty.textContent = 'No materials.';
-			swatches.appendChild(empty);
-		}
-		matsSec.appendChild(swatches);
-		shell.appendChild(matsSec);
 
 		editorEl.appendChild(shell);
 	}
