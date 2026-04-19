@@ -230,6 +230,10 @@ class App {
 						(typeof rootFile === 'string'
 							? rootFile.split('/').pop().split('?')[0]
 							: rootFile && rootFile.name) || 'model';
+					// Stash the original filename on the viewer so the GLB
+					// export flow can reuse it (with a .glb extension) when
+					// naming the downloaded file.
+					if (this.viewer) this.viewer._originalFilename = name;
 					this.toast(`Loaded ${name}`, { level: 'success' });
 				}
 				cleanup();

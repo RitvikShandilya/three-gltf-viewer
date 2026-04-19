@@ -4,6 +4,7 @@ import {
 	AxesHelper,
 	Box3,
 	Cache,
+	CanvasTexture,
 	Color,
 	DirectionalLight,
 	GridHelper,
@@ -12,16 +13,19 @@ import {
 	LoadingManager,
 	Mesh,
 	MeshBasicMaterial,
+	MeshStandardMaterial,
 	PCFSoftShadowMap,
 	PMREMGenerator,
 	PerspectiveCamera,
 	PlaneGeometry,
 	PointsMaterial,
 	REVISION,
+	RepeatWrapping,
 	RingGeometry,
 	Scene,
 	SkeletonHelper,
 	SRGBColorSpace,
+	Texture,
 	Vector2,
 	Vector3,
 	WebGLRenderer,
@@ -31,11 +35,13 @@ import {
 } from 'three';
 import Stats from 'three/addons/libs/stats.module.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
 import { KTX2Loader } from 'three/addons/loaders/KTX2Loader.js';
 import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
 import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { EXRLoader } from 'three/addons/loaders/EXRLoader.js';
+import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
@@ -494,6 +500,10 @@ export class Viewer {
 		// Surface the fix routine so external UI (e.g. the validation report
 		// toggle) can trigger the same cleanup used by the BRIEF tab button.
 		window.VIEWER.fixGLTF = () => this._fixGLTF();
+		// Surface the GLB exporter so external UI (validator toggle, keyboard
+		// shortcuts, devtools) can download the current scene — including
+		// anything mutated by _fixGLTF() or swapped assets — in one click.
+		window.VIEWER.exportGLB = () => this._exportGLB();
 	}
 
 	/**
@@ -675,7 +685,7 @@ export class Viewer {
 	}
 
 	getCubeMapTexture(environment) {
-		const { id, path } = environment;
+		const { id, path, format } = environment;
 
 		// neutral (THREE.RoomEnvironment)
 		if (id === 'neutral') {
@@ -692,8 +702,16 @@ export class Viewer {
 			return Promise.resolve({ envMap: this._envCache.get(id) });
 		}
 
+		// Pick loader by explicit `format` hint first, then by URL extension.
+		// Note: `.hdr.jpg` (gain-map encoded HDR) requires HDRJPGLoader from
+		// @monogrid/gainmap-js and is NOT parseable by RGBELoader. We currently
+		// don't bundle that loader, so any .hdr.jpg entries will fail to load.
+		const fmt = (format || '').toLowerCase();
+		const isEXR = fmt === '.exr' || /\.exr(\?|$)/i.test(path);
+		const Loader = isEXR ? EXRLoader : RGBELoader;
+
 		return new Promise((resolve, reject) => {
-			new EXRLoader().load(
+			new Loader().load(
 				path,
 				(texture) => {
 					const envMap = this.pmremGenerator.fromEquirectangular(texture).texture;
@@ -705,6 +723,78 @@ export class Viewer {
 				reject,
 			);
 		});
+	}
+
+	_buildGroundGridTexture() {
+		if (this._groundTexture) return this._groundTexture;
+		const res = 512;
+		const canvas = document.createElement('canvas');
+		canvas.width = res;
+		canvas.height = res;
+		const ctx = canvas.getContext('2d');
+
+		// Solid dark base.
+		ctx.fillStyle = '#0a0a0a';
+		ctx.fillRect(0, 0, res, res);
+
+		// 1px hairline grid lines every 32px.
+		ctx.strokeStyle = '#1a1a1a';
+		ctx.lineWidth = 1;
+		ctx.beginPath();
+		for (let i = 0; i <= res; i += 32) {
+			const p = i + 0.5; // crisp 1px lines
+			ctx.moveTo(p, 0);
+			ctx.lineTo(p, res);
+			ctx.moveTo(0, p);
+			ctx.lineTo(res, p);
+		}
+		ctx.stroke();
+
+		// Bolder 2px lines every 128px.
+		ctx.strokeStyle = '#2a2a2a';
+		ctx.lineWidth = 2;
+		ctx.beginPath();
+		for (let i = 0; i <= res; i += 128) {
+			ctx.moveTo(i, 0);
+			ctx.lineTo(i, res);
+			ctx.moveTo(0, i);
+			ctx.lineTo(res, i);
+		}
+		ctx.stroke();
+
+		const tex = new CanvasTexture(canvas);
+		tex.wrapS = RepeatWrapping;
+		tex.wrapT = RepeatWrapping;
+		tex.anisotropy = 8;
+		this._groundTexture = tex;
+		return tex;
+	}
+
+	_buildGroundAlphaTexture() {
+		if (this._groundAlphaTexture) return this._groundAlphaTexture;
+		const res = 512;
+		const canvas = document.createElement('canvas');
+		canvas.width = res;
+		canvas.height = res;
+		const ctx = canvas.getContext('2d');
+
+		// Radial gradient: opaque center -> fully transparent at edges.
+		const cx = res / 2;
+		const cy = res / 2;
+		const gradient = ctx.createRadialGradient(cx, cy, 0, cx, cy, res / 2);
+		gradient.addColorStop(0.0, 'rgba(255,255,255,1)');
+		gradient.addColorStop(0.55, 'rgba(255,255,255,0.85)');
+		gradient.addColorStop(1.0, 'rgba(0,0,0,0)');
+		ctx.fillStyle = gradient;
+		ctx.fillRect(0, 0, res, res);
+
+		const tex = new CanvasTexture(canvas);
+		// No tiling on alpha mask -- single full-plane vignette.
+		tex.wrapS = RepeatWrapping;
+		tex.wrapT = RepeatWrapping;
+		tex.repeat.set(1, 1);
+		this._groundAlphaTexture = tex;
+		return tex;
 	}
 
 	_updateGround() {
@@ -727,12 +817,23 @@ export class Viewer {
 		const size = this._modelSize || new Vector3(1, 1, 1);
 		const extent = Math.max(size.x, size.z, 0.1) * 4;
 
-		// Main ground plane -- subtle dark square beneath the model.
+		// Main ground plane -- dark PBR surface with a procedural grid map and
+		// a radial vignette alpha mask so edges fade into the background.
+		const gridTex = this._buildGroundGridTexture();
+		// One grid cell covers 8 world units, so tile based on plane size.
+		gridTex.repeat.set(extent / 8, extent / 8);
+		gridTex.needsUpdate = true;
+
+		const alphaTex = this._buildGroundAlphaTexture();
+
 		const planeGeo = new PlaneGeometry(extent, extent);
-		const planeMat = new MeshBasicMaterial({
+		const planeMat = new MeshStandardMaterial({
 			color: 0x0a0a0a,
+			roughness: 0.9,
+			metalness: 0.0,
+			map: gridTex,
+			alphaMap: alphaTex,
 			transparent: true,
-			opacity: 0.6,
 			depthWrite: false,
 			side: DoubleSide,
 		});
@@ -743,14 +844,16 @@ export class Viewer {
 		this.groundPlane.renderOrder = -1;
 		this.scene.add(this.groundPlane);
 
-		// Concentric thin "shadow hint" ring just above the plane for depth cues.
+		// Amber halo ring just above the plane for a grounded, branded accent.
 		const ringInner = Math.max(size.x, size.z) * 0.55;
 		const ringOuter = ringInner * 1.04;
 		const ringGeo = new RingGeometry(ringInner, ringOuter, 96);
+		const accentHex =
+			this.state && this.state.accent ? this.state.accent : '#FCB131';
 		const ringMat = new MeshBasicMaterial({
-			color: 0x000000,
+			color: new Color(accentHex),
 			transparent: true,
-			opacity: 0.25,
+			opacity: 0.55,
 			depthWrite: false,
 			side: DoubleSide,
 		});
@@ -970,6 +1073,84 @@ export class Viewer {
 		}
 	}
 
+	/**
+	 * Export the current `this.content` Object3D as a self-contained .glb
+	 * (binary glTF) and trigger a browser download. Whatever fixes or
+	 * swapped-asset mutations are currently live in the scene graph get
+	 * baked into the export — we re-serialize from the in-memory three.js
+	 * tree, not from the original file bytes.
+	 *
+	 * Output filename is derived from the originally-loaded file (stored
+	 * on `this._originalFilename` by app.js) with its extension replaced
+	 * by .glb, falling back to "scene.glb".
+	 */
+	_exportGLB() {
+		if (!this.content) {
+			if (window.VIEWER && typeof window.VIEWER.toast === 'function') {
+				window.VIEWER.toast('No model loaded.', { level: 'error' });
+			}
+			return;
+		}
+
+		const base =
+			(this._originalFilename && String(this._originalFilename).replace(/\.(gltf|glb)$/i, '')) ||
+			'scene';
+		const filename = `${base}.glb`;
+
+		const onSuccess = (result) => {
+			try {
+				// For `binary: true` the result is an ArrayBuffer. Guard against
+				// a JSON object in case any caller flips the option later.
+				const blob =
+					result instanceof ArrayBuffer
+						? new Blob([result], { type: 'model/gltf-binary' })
+						: new Blob([JSON.stringify(result)], { type: 'model/gltf+json' });
+
+				const url = URL.createObjectURL(blob);
+				const a = document.createElement('a');
+				a.href = url;
+				a.download = filename;
+				a.rel = 'noopener';
+				document.body.appendChild(a);
+				a.click();
+				document.body.removeChild(a);
+				// Release the object URL on the next frame so the browser has
+				// had time to kick off the download.
+				setTimeout(() => URL.revokeObjectURL(url), 0);
+
+				const sizeKB = Math.max(1, Math.round(blob.size / 1024));
+				if (window.VIEWER && typeof window.VIEWER.toast === 'function') {
+					window.VIEWER.toast(`EXPORTED · ${filename} · ${sizeKB.toLocaleString()} KB`, {
+						level: 'success',
+					});
+				}
+			} catch (err) {
+				console.error('[EXPORT] Failed to finalize .glb download:', err);
+				if (window.VIEWER && typeof window.VIEWER.toast === 'function') {
+					window.VIEWER.toast('EXPORT FAILED', { level: 'error' });
+				}
+			}
+		};
+
+		const onError = (error) => {
+			console.error('[EXPORT] GLTFExporter failed:', error);
+			if (window.VIEWER && typeof window.VIEWER.toast === 'function') {
+				window.VIEWER.toast('EXPORT FAILED', { level: 'error' });
+			}
+		};
+
+		try {
+			const exporter = new GLTFExporter();
+			exporter.parse(this.content, onSuccess, onError, {
+				binary: true,
+				embedImages: true,
+				animations: this.clips || [],
+			});
+		} catch (err) {
+			onError(err);
+		}
+	}
+
 	updateBackground() {
 		this.backgroundColor.set(this.state.bgColor);
 	}
@@ -1059,6 +1240,7 @@ export class Viewer {
 						key: 'frame',
 						label: 'Frame Model',
 						type: 'action',
+						icon: 'frame',
 						desc: 'Reset the camera to frame the whole model.',
 						run: () => this._cameraPreset('reset'),
 					},
@@ -1066,6 +1248,7 @@ export class Viewer {
 						key: 'top',
 						label: 'Top View',
 						type: 'action',
+						icon: 'top',
 						desc: 'Look straight down the Y axis.',
 						run: () => this._cameraPreset('top'),
 					},
@@ -1073,6 +1256,7 @@ export class Viewer {
 						key: 'front',
 						label: 'Front View',
 						type: 'action',
+						icon: 'front',
 						desc: 'Look down the +Z axis.',
 						run: () => this._cameraPreset('front'),
 					},
@@ -1080,6 +1264,7 @@ export class Viewer {
 						key: 'side',
 						label: 'Side View',
 						type: 'action',
+						icon: 'side',
 						desc: 'Look down the +X axis.',
 						run: () => this._cameraPreset('side'),
 					},
@@ -1087,6 +1272,7 @@ export class Viewer {
 						key: 'back',
 						label: 'Back View',
 						type: 'action',
+						icon: 'back',
 						desc: 'Look down the -Z axis.',
 						run: () => this._cameraPreset('back'),
 					},
@@ -1094,6 +1280,7 @@ export class Viewer {
 						key: 'iso',
 						label: 'Isometric',
 						type: 'action',
+						icon: 'iso',
 						desc: 'Classic 3/4 isometric view.',
 						run: () => this._cameraPreset('iso'),
 					},
@@ -1102,6 +1289,7 @@ export class Viewer {
 						label: 'Schematic',
 						type: 'map',
 						view: 'overview',
+						icon: 'schematic',
 						desc: 'Top-down schematic of the loaded model. Your viewpoint is the red marker.',
 					},
 				],
@@ -1144,6 +1332,59 @@ export class Viewer {
 						desc: 'Recompute normals, drop NaN vertices, rebuild bounds, sit on floor, center XZ, and refresh textures.',
 						run: () => this._fixGLTF(),
 					},
+					{
+						key: 'exportGlb',
+						label: 'Download GLB',
+						type: 'action',
+						desc: 'Export the current scene (including any fixes or swapped assets) as a .glb file.',
+						run: () => this._exportGLB(),
+					},
+				],
+			},
+			advanced: {
+				label: 'ADVANCED',
+				rows: [
+					{
+						key: 'adv-overview',
+						label: 'Overview',
+						type: 'asset-summary',
+						desc: 'Per-asset inventory: images, textures, buffers, meshes, materials. Totals, savings, swap/replace.',
+					},
+					{
+						key: 'adv-images',
+						label: 'Images',
+						type: 'asset',
+						view: 'images',
+						desc: 'Raw image resources (PNG/JPEG/KTX2). Download the originals or replace them in-place.',
+					},
+					{
+						key: 'adv-textures',
+						label: 'Textures',
+						type: 'asset',
+						view: 'textures',
+						desc: 'Three.js textures derived from images — sampler state, UV, anisotropy.',
+					},
+					{
+						key: 'adv-buffers',
+						label: 'Buffers',
+						type: 'asset',
+						view: 'buffers',
+						desc: 'Binary buffers backing geometry, animation, and morph data.',
+					},
+					{
+						key: 'adv-meshes',
+						label: 'Meshes',
+						type: 'asset',
+						view: 'meshes',
+						desc: 'Per-mesh vertex / triangle / primitive inventory.',
+					},
+					{
+						key: 'adv-materials',
+						label: 'Materials',
+						type: 'asset',
+						view: 'materials',
+						desc: 'Every unique material in the scene with its texture map count.',
+					},
 				],
 			},
 			display: {
@@ -1153,7 +1394,7 @@ export class Viewer {
 						key: 'background',
 						label: 'Background',
 						type: 'bool',
-						desc: 'Render the environment as the scene background instead of a solid color.',
+						desc: 'Render the environment map as the scene background.',
 						get: () => state.background,
 						set: (v) => {
 							state.background = v;
@@ -1164,6 +1405,7 @@ export class Viewer {
 						key: 'autoRotate',
 						label: 'Auto Rotate',
 						type: 'bool',
+						desc: 'Slowly spin the camera around the model.',
 						get: () => state.autoRotate,
 						set: (v) => {
 							state.autoRotate = v;
@@ -1174,7 +1416,7 @@ export class Viewer {
 						key: 'followCamera',
 						label: 'Follow Camera',
 						type: 'bool',
-						desc: 'Camera tracks the model root position each frame. Useful for animated characters that translate around the scene.',
+						desc: 'Camera tracks the model as it animates.',
 						get: () => state.followCamera,
 						set: (v) => {
 							state.followCamera = v;
@@ -1184,7 +1426,7 @@ export class Viewer {
 						key: 'freePan',
 						label: 'Free Pan',
 						type: 'bool',
-						desc: 'Increase pan sensitivity and remove zoom cap so you can roam the scene freely.',
+						desc: 'Let the camera roam without a zoom cap.',
 						get: () => state.freePan,
 						set: (v) => {
 							state.freePan = v;
@@ -1195,6 +1437,7 @@ export class Viewer {
 						key: 'wireframe',
 						label: 'Wireframe',
 						type: 'bool',
+						desc: 'Show the underlying geometry as lines.',
 						get: () => state.wireframe,
 						set: (v) => {
 							state.wireframe = v;
@@ -1205,6 +1448,7 @@ export class Viewer {
 						key: 'skeleton',
 						label: 'Skeleton',
 						type: 'bool',
+						desc: 'Display animation bone joints overlaid on the model.',
 						get: () => state.skeleton,
 						set: (v) => {
 							state.skeleton = v;
@@ -1215,6 +1459,7 @@ export class Viewer {
 						key: 'grid',
 						label: 'Grid',
 						type: 'bool',
+						desc: 'Show a floor grid for spatial reference.',
 						get: () => state.grid,
 						set: (v) => {
 							state.grid = v;
@@ -1225,7 +1470,7 @@ export class Viewer {
 						key: 'ground',
 						label: 'Ground Plane',
 						type: 'bool',
-						desc: 'Show a subtle ground plane beneath the model so it does not appear to float.',
+						desc: 'Add a subtle floor so the model does not float in mid-air.',
 						get: () => state.ground,
 						set: (v) => {
 							state.ground = v;
@@ -1236,6 +1481,7 @@ export class Viewer {
 						key: 'screenSpacePanning',
 						label: 'Screen-Space Pan',
 						type: 'bool',
+						desc: 'Pan in screen units (vs world units).',
 						get: () => this.controls.screenSpacePanning,
 						set: (v) => {
 							this.controls.screenSpacePanning = v;
@@ -1248,6 +1494,7 @@ export class Viewer {
 						min: 1,
 						max: 16,
 						step: 0.1,
+						desc: 'Size of points for point-cloud models.',
 						get: () => state.pointSize,
 						set: (v) => {
 							state.pointSize = v;
@@ -1258,6 +1505,7 @@ export class Viewer {
 						key: 'bgColor',
 						label: 'BG Color',
 						type: 'color',
+						desc: 'Flat background color when no environment is set.',
 						get: () => state.bgColor,
 						set: (v) => {
 							state.bgColor = v;
@@ -1274,6 +1522,7 @@ export class Viewer {
 						label: 'Environment',
 						type: 'enum',
 						options: environments.map((env) => env.name),
+						desc: 'HDR skybox used for lighting and reflections.',
 						get: () => state.environment,
 						set: (v) => {
 							state.environment = v;
@@ -1286,6 +1535,7 @@ export class Viewer {
 						type: 'enum',
 						options: ['Linear', 'ACES Filmic'],
 						values: [LinearToneMapping, ACESFilmicToneMapping],
+						desc: 'How HDR brightness maps to screen. ACES is cinematic.',
 						get: () => (state.toneMapping === ACESFilmicToneMapping ? 'ACES Filmic' : 'Linear'),
 						set: (v) => {
 							state.toneMapping = v === 'ACES Filmic' ? ACESFilmicToneMapping : LinearToneMapping;
@@ -1299,6 +1549,7 @@ export class Viewer {
 						min: -10,
 						max: 10,
 						step: 0.01,
+						desc: 'Overall brightness multiplier. Negative darkens, positive brightens.',
 						get: () => state.exposure,
 						set: (v) => {
 							state.exposure = v;
@@ -1309,6 +1560,7 @@ export class Viewer {
 						key: 'punctualLights',
 						label: 'Punctual Lights',
 						type: 'bool',
+						desc: 'Enable extra ambient and directional lights when the model has none.',
 						get: () => state.punctualLights,
 						set: (v) => {
 							state.punctualLights = v;
@@ -1322,6 +1574,7 @@ export class Viewer {
 						min: 0,
 						max: 2,
 						step: 0.01,
+						desc: 'Overall base light hitting every surface equally.',
 						get: () => state.ambientIntensity,
 						set: (v) => {
 							state.ambientIntensity = v;
@@ -1332,6 +1585,7 @@ export class Viewer {
 						key: 'ambientColor',
 						label: 'Ambient Color',
 						type: 'color',
+						desc: 'Tint of the base ambient light.',
 						get: () => state.ambientColor,
 						set: (v) => {
 							state.ambientColor = v;
@@ -1345,6 +1599,7 @@ export class Viewer {
 						min: 0,
 						max: 4,
 						step: 0.01,
+						desc: 'Strength of the main directional (sun-like) light.',
 						get: () => state.directIntensity,
 						set: (v) => {
 							state.directIntensity = v;
@@ -1355,6 +1610,7 @@ export class Viewer {
 						key: 'directColor',
 						label: 'Direct Color',
 						type: 'color',
+						desc: 'Color of the main directional light.',
 						get: () => state.directColor,
 						set: (v) => {
 							state.directColor = v;
@@ -1366,7 +1622,7 @@ export class Viewer {
 						key: 'bloom',
 						label: 'Bloom',
 						type: 'bool',
-						desc: 'Physically loose bloom pass (UnrealBloomPass). Toggling this on activates the post-processing pipeline; off bypasses it entirely.',
+						desc: 'Soft glow around bright highlights (headlights, sun glints).',
 						get: () => state.bloom,
 						set: (v) => {
 							state.bloom = v;
@@ -1380,7 +1636,7 @@ export class Viewer {
 						min: 0,
 						max: 3,
 						step: 0.01,
-						desc: 'Intensity of the bloom highlight.',
+						desc: 'How bright the glow gets.',
 						get: () => state.bloomStrength,
 						set: (v) => {
 							state.bloomStrength = v;
@@ -1394,7 +1650,7 @@ export class Viewer {
 						min: 0,
 						max: 1,
 						step: 0.01,
-						desc: 'Luminance threshold above which pixels contribute to bloom.',
+						desc: 'Brightness cutoff — only pixels above this bloom.',
 						get: () => state.bloomThreshold,
 						set: (v) => {
 							state.bloomThreshold = v;
@@ -1408,7 +1664,7 @@ export class Viewer {
 						min: 0,
 						max: 1,
 						step: 0.01,
-						desc: 'How far the bloom halo spreads.',
+						desc: 'How far the glow spreads from bright pixels.',
 						get: () => state.bloomRadius,
 						set: (v) => {
 							state.bloomRadius = v;
@@ -1419,7 +1675,7 @@ export class Viewer {
 						key: 'ssao',
 						label: 'SSAO',
 						type: 'bool',
-						desc: 'Screen-space ambient occlusion. Darkens crevices for added depth.',
+						desc: 'Screen-Space Ambient Occlusion. Adds contact shadows in creases.',
 						get: () => state.ssao,
 						set: (v) => {
 							state.ssao = v;
@@ -1433,7 +1689,7 @@ export class Viewer {
 						min: 0,
 						max: 2,
 						step: 0.01,
-						desc: 'Controls the effective kernel radius of the AO sampler.',
+						desc: 'Intensity of the creases.',
 						get: () => state.ssaoStrength,
 						set: (v) => {
 							state.ssaoStrength = v;
@@ -1444,7 +1700,7 @@ export class Viewer {
 						key: 'filmGrain',
 						label: 'Film Grain',
 						type: 'bool',
-						desc: 'Adds subtle animated noise for a filmic feel.',
+						desc: 'Subtle noise overlay for a cinematic feel.',
 						get: () => state.filmGrain,
 						set: (v) => {
 							state.filmGrain = v;
@@ -1458,6 +1714,7 @@ export class Viewer {
 						min: 0,
 						max: 1,
 						step: 0.01,
+						desc: 'Amount of noise applied.',
 						get: () => state.filmGrainIntensity,
 						set: (v) => {
 							state.filmGrainIntensity = v;
@@ -1581,6 +1838,7 @@ export class Viewer {
 			key: 'playAll',
 			label: 'Play All',
 			type: 'action',
+			desc: 'Start all animation clips simultaneously.',
 			run: () => this.playAllClips(),
 		});
 		rows.push({
@@ -1590,6 +1848,7 @@ export class Viewer {
 			min: 0,
 			max: 1,
 			step: 0.01,
+			desc: 'Animation speed multiplier (1 = normal).',
 			get: () => this.state.playbackSpeed,
 			set: (v) => {
 				this.state.playbackSpeed = v;
@@ -1601,6 +1860,7 @@ export class Viewer {
 				key: `clip:${clip.name}`,
 				label: clip.name,
 				type: 'bool',
+				desc: 'Play or pause this clip.',
 				get: () => !!this.state.actionStates[clip.name],
 				set: (v) => {
 					this.state.actionStates[clip.name] = v;
@@ -1635,6 +1895,7 @@ export class Viewer {
 					min: 0,
 					max: 1,
 					step: 0.01,
+					desc: 'Blend weight for this morph target (0 = off, 1 = full).',
 					get: () => influences[i],
 					set: (v) => {
 						influences[i] = v;
@@ -1661,6 +1922,7 @@ export class Viewer {
 				label: 'Active Camera',
 				type: 'enum',
 				options: names,
+				desc: 'Switch between the default orbit camera and cameras embedded in the glTF.',
 				get: () => this.state.camera,
 				set: (v) => {
 					this.state.camera = v;
@@ -1779,9 +2041,6 @@ export class Viewer {
 		const query = (this.ui.railQuery || '').trim().toLowerCase();
 		railEl.innerHTML = '';
 
-		// Toggle scroll fade indicators when there are more than 10 rows.
-		railEl.classList.toggle('pm__rail--scrollable', rows.length > 10);
-
 		// Search / filter input — sits above the rail title.
 		const search = document.createElement('div');
 		search.className = 'pm__search';
@@ -1837,7 +2096,13 @@ export class Viewer {
 			);
 			btn.innerHTML = `<span class="pm__row-label"></span><span class="pm__row-value"></span>`;
 			btn.querySelector('.pm__row-label').textContent = String(row.label).toUpperCase();
-			btn.querySelector('.pm__row-value').textContent = this._formatValue(row);
+			const valueEl = btn.querySelector('.pm__row-value');
+			if (row.icon) {
+				valueEl.classList.add('pm__row-icon');
+				valueEl.innerHTML = this._iconFor(row.icon);
+			} else {
+				valueEl.textContent = this._formatValue(row);
+			}
 			btn.addEventListener('click', () => this._selectRow(i));
 			railEl.appendChild(btn);
 		});
@@ -1875,6 +2140,7 @@ export class Viewer {
 		if (row.type === 'stats') return '';
 		if (row.type === 'map') return '◉';
 		if (row.type === 'brief') return '◆';
+		if (row.type === 'asset' || row.type === 'asset-summary') return '◈';
 		const v = row.get ? row.get() : '';
 		if (row.type === 'bool') return v ? 'ON' : 'OFF';
 		if (row.type === 'num')
@@ -1882,6 +2148,75 @@ export class Viewer {
 		if (row.type === 'color') return String(v).toUpperCase();
 		if (row.type === 'enum') return String(v).toUpperCase();
 		return v;
+	}
+
+	/**
+	 * Returns inline SVG markup for a camera-preset icon key.
+	 * Icons use `currentColor` + 1.2px stroke so they inherit row color
+	 * (dim → amber on hover → black when the row is selected/inverted).
+	 */
+	_iconFor(key, size = 14) {
+		const s = size;
+		const sw = Math.max(1, (size / 14) * 1.2);
+		const common = `width="${s}" height="${s}" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="${sw}" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"`;
+		switch (key) {
+			case 'frame':
+				// Solid cube inside a dashed bounding rectangle.
+				return `<svg ${common}>
+					<rect x="1" y="1" width="12" height="12" stroke-dasharray="1.5 1.2" opacity="0.7"/>
+					<rect x="4" y="4" width="6" height="6"/>
+				</svg>`;
+			case 'top':
+				// Square viewed from directly above + center "looking-down" dot.
+				return `<svg ${common}>
+					<rect x="2" y="2" width="10" height="10"/>
+					<circle cx="7" cy="7" r="0.9" fill="currentColor" stroke="none"/>
+				</svg>`;
+			case 'front':
+				// Rectangle + tiny XY indicator below.
+				return `<svg ${common}>
+					<rect x="2.5" y="1.5" width="9" height="8"/>
+					<path d="M2.5 12 L4 12 M4.5 12 L6 12" opacity="0.85"/>
+					<path d="M7 12 L8.5 12 M9 12 L10.5 12" opacity="0.55"/>
+				</svg>`;
+			case 'side':
+				// Same rectangle but stroked on one vertical edge for "side".
+				return `<svg ${common}>
+					<rect x="2.5" y="1.5" width="9" height="8"/>
+					<line x1="2.5" y1="1.5" x2="2.5" y2="9.5" stroke-width="${sw * 1.6}"/>
+					<path d="M2.5 12 L4 12 M4.5 12 L6 12" opacity="0.55"/>
+					<path d="M7 12 L8.5 12 M9 12 L10.5 12" opacity="0.85"/>
+				</svg>`;
+			case 'back':
+				// Mirrored front: heavy right edge + small back-arrow.
+				return `<svg ${common}>
+					<rect x="2.5" y="1.5" width="9" height="8"/>
+					<line x1="11.5" y1="1.5" x2="11.5" y2="9.5" stroke-width="${sw * 1.6}"/>
+					<path d="M10 12 L7 12" />
+					<path d="M8 11 L7 12 L8 13" />
+				</svg>`;
+			case 'iso':
+				// Classic iso diamond showing three cube faces.
+				return `<svg ${common}>
+					<path d="M7 1.5 L12.5 4.75 L12.5 9.25 L7 12.5 L1.5 9.25 L1.5 4.75 Z"/>
+					<path d="M7 1.5 L7 7"/>
+					<path d="M7 7 L12.5 4.75"/>
+					<path d="M7 7 L1.5 4.75"/>
+					<path d="M7 7 L7 12.5" opacity="0.7"/>
+				</svg>`;
+			case 'schematic': {
+				// 4x4 grid.
+				const lines = [];
+				for (let i = 0; i <= 4; i++) {
+					const p = 1 + i * 3;
+					lines.push(`<line x1="${p}" y1="1" x2="${p}" y2="13"/>`);
+					lines.push(`<line x1="1" y1="${p}" x2="13" y2="${p}"/>`);
+				}
+				return `<svg ${common}>${lines.join('')}</svg>`;
+			}
+			default:
+				return '';
+		}
 	}
 
 	_selectRow(i) {
@@ -2065,6 +2400,13 @@ export class Viewer {
 			});
 			editorEl.appendChild(c);
 		} else if (row.type === 'action') {
+			if (row.icon) {
+				const preview = document.createElement('div');
+				preview.className = 'pm__icon-preview';
+				preview.innerHTML = this._iconFor(row.icon, 40);
+				preview.setAttribute('aria-hidden', 'true');
+				editorEl.appendChild(preview);
+			}
 			const b = document.createElement('button');
 			b.type = 'button';
 			b.className = 'pm__action-btn';
@@ -2076,6 +2418,8 @@ export class Viewer {
 			this._renderMapPane(editorEl, row);
 		} else if (row.type === 'brief') {
 			this._renderBriefPane(editorEl, row);
+		} else if (row.type === 'asset' || row.type === 'asset-summary') {
+			this._renderAssetsPane(editorEl, row);
 		} else if (row.type === 'stats') {
 			editorEl.appendChild(labelEl);
 			if (this.stats && this.stats.dom) {
@@ -2869,12 +3213,800 @@ export class Viewer {
 		editorEl.appendChild(shell);
 	}
 
+	// =============================================================
+	// ADVANCED tab — per-asset inspector / swap
+	// =============================================================
+
+	/**
+	 * Pull every raw asset we can from the loaded glTF parser and the
+	 * three.js scene graph. Best-effort: missing fields show an em-dash.
+	 */
+	_collectAssets() {
+		const gltf = (typeof window !== 'undefined' && window.VIEWER && window.VIEWER.json) || null;
+		const scene =
+			(typeof window !== 'undefined' && window.VIEWER && window.VIEWER.scene) || this.content;
+
+		const out = {
+			hasModel: !!(gltf && scene),
+			gltf,
+			scene,
+			parser: gltf && gltf.parser,
+			rawJson: (gltf && gltf.parser && gltf.parser.json) || null,
+			images: [],
+			textures: [],
+			buffers: [],
+			meshes: [],
+			materials: [],
+		};
+
+		if (!out.hasModel) return out;
+
+		const json = out.rawJson || {};
+
+		// --- Images -------------------------------------------------
+		const rawImages = Array.isArray(json.images) ? json.images : [];
+		rawImages.forEach((img, i) => {
+			let bytes = 0;
+			let w = 0;
+			let h = 0;
+			let mime = img.mimeType || '';
+			let previewUrl = null;
+
+			const tex = this._findTextureForImageIndex(i);
+			if (tex && tex.image) {
+				const im = tex.image;
+				w = im.naturalWidth || im.width || 0;
+				h = im.naturalHeight || im.height || 0;
+				if (im.src && typeof im.src === 'string') previewUrl = im.src;
+			}
+
+			if (typeof img.bufferView === 'number' && Array.isArray(json.bufferViews)) {
+				const bv = json.bufferViews[img.bufferView];
+				if (bv && typeof bv.byteLength === 'number') bytes = bv.byteLength;
+			}
+			if (!mime && img.uri && /\.jpe?g($|\?)/i.test(img.uri)) mime = 'image/jpeg';
+			if (!mime && img.uri && /\.png($|\?)/i.test(img.uri)) mime = 'image/png';
+			if (!mime) mime = 'image/png';
+
+			if (this._swappedAssets && this._swappedAssets.has(i)) {
+				const swap = this._swappedAssets.get(i);
+				bytes = swap.bytes ? swap.bytes.byteLength : bytes;
+				mime = swap.mime || mime;
+			}
+
+			out.images.push({
+				index: i,
+				name: img.name || (img.uri ? String(img.uri).split('/').pop() : `image_${i}`),
+				mime,
+				type: (mime.split('/').pop() || 'png').toUpperCase(),
+				width: w,
+				height: h,
+				bytes,
+				previewUrl,
+				texture: tex,
+				raw: img,
+			});
+		});
+
+		// --- Textures (walk the scene) ------------------------------
+		const seenTex = new Set();
+		scene.traverse((node) => {
+			const mats = Array.isArray(node.material)
+				? node.material
+				: node.material
+					? [node.material]
+					: [];
+			mats.forEach((m) => {
+				if (!m) return;
+				for (const key in m) {
+					const val = m[key];
+					if (val && val.isTexture && !seenTex.has(val.uuid)) {
+						seenTex.add(val.uuid);
+						const im = val.image || {};
+						out.textures.push({
+							uuid: val.uuid,
+							name: val.name || key,
+							slot: key,
+							texture: val,
+							width: im.width || im.naturalWidth || 0,
+							height: im.height || im.naturalHeight || 0,
+							flipY: val.flipY,
+							anisotropy: val.anisotropy,
+						});
+					}
+				}
+			});
+		});
+
+		// --- Buffers ------------------------------------------------
+		const rawBuffers = Array.isArray(json.buffers) ? json.buffers : [];
+		rawBuffers.forEach((b, i) => {
+			out.buffers.push({
+				index: i,
+				name: b.name || (b.uri ? String(b.uri).split('/').pop() : `buffer_${i}.bin`),
+				bytes: b.byteLength || 0,
+				uri: b.uri || null,
+				raw: b,
+			});
+		});
+
+		// --- Meshes -------------------------------------------------
+		const rawMeshes = Array.isArray(json.meshes) ? json.meshes : [];
+		rawMeshes.forEach((m, i) => {
+			let verts = 0;
+			let tris = 0;
+			const primitives = Array.isArray(m.primitives) ? m.primitives : [];
+			primitives.forEach((p) => {
+				const posIdx = p.attributes && p.attributes.POSITION;
+				if (typeof posIdx === 'number' && Array.isArray(json.accessors)) {
+					verts += (json.accessors[posIdx] && json.accessors[posIdx].count) || 0;
+				}
+				if (typeof p.indices === 'number' && Array.isArray(json.accessors)) {
+					const idxCount = (json.accessors[p.indices] && json.accessors[p.indices].count) || 0;
+					tris += Math.floor(idxCount / 3);
+				}
+			});
+			out.meshes.push({
+				index: i,
+				name: m.name || `mesh_${i}`,
+				primitives: primitives.length,
+				verts,
+				tris,
+			});
+		});
+
+		// --- Materials ----------------------------------------------
+		const rawMats = Array.isArray(json.materials) ? json.materials : [];
+		rawMats.forEach((m, i) => {
+			const pbr = m.pbrMetallicRoughness || {};
+			const mapCount =
+				(pbr.baseColorTexture ? 1 : 0) +
+				(pbr.metallicRoughnessTexture ? 1 : 0) +
+				(m.normalTexture ? 1 : 0) +
+				(m.occlusionTexture ? 1 : 0) +
+				(m.emissiveTexture ? 1 : 0);
+			out.materials.push({
+				index: i,
+				name: m.name || `material_${i}`,
+				mapCount,
+				alphaMode: m.alphaMode || 'OPAQUE',
+				doubleSided: !!m.doubleSided,
+			});
+		});
+
+		return out;
+	}
+
+	_findTextureForImageIndex(imageIndex) {
+		const gltf = (window.VIEWER && window.VIEWER.json) || null;
+		if (!gltf) return null;
+		const json = gltf.parser && gltf.parser.json;
+		if (!json || !Array.isArray(json.textures)) return null;
+
+		const texIdxsForImage = [];
+		json.textures.forEach((t, ti) => {
+			if (t && t.source === imageIndex) texIdxsForImage.push(ti);
+		});
+		if (!texIdxsForImage.length) return null;
+
+		const scene = (window.VIEWER && window.VIEWER.scene) || this.content;
+		if (!scene) return null;
+
+		let found = null;
+		let fallback = null;
+		scene.traverse((node) => {
+			if (found) return;
+			const mats = Array.isArray(node.material)
+				? node.material
+				: node.material
+					? [node.material]
+					: [];
+			mats.forEach((m) => {
+				if (!m || found) return;
+				for (const key in m) {
+					const v = m[key];
+					if (v && v.isTexture) {
+						if (v.userData && v.userData.gltfTextureIndex != null) {
+							if (texIdxsForImage.includes(v.userData.gltfTextureIndex)) {
+								found = v;
+								return;
+							}
+						}
+						if (!fallback) fallback = v;
+					}
+				}
+			});
+		});
+		return found || fallback;
+	}
+
+	_formatKB(bytes) {
+		if (!bytes || !isFinite(bytes)) return '\u2014';
+		if (bytes < 1024) return `${bytes} B`;
+		if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+		return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+	}
+
+	_estGpuBytes(w, h) {
+		if (!w || !h) return 0;
+		return Math.round(w * h * 5.33);
+	}
+
+	_suggestOptimization(img) {
+		const { width: w, height: h, bytes, mime } = img;
+		if (!w || !h) return null;
+		const raw = w * h * 4;
+		const estJpeg = Math.round(raw * 0.12);
+		const estPng = Math.round(raw * 0.6);
+
+		if (Math.max(w, h) >= 2048) {
+			return { text: `Downsample to 1024\u00D71024: \u221275%`, pct: 75 };
+		}
+
+		const isPng = /png/i.test(mime);
+		if (isPng && bytes > 0) {
+			const saved = Math.max(0, bytes - estJpeg);
+			const pct = Math.min(95, Math.round((saved / bytes) * 100));
+			if (pct >= 15) return { text: `\u2212${pct}% as JPEG 85%`, pct };
+		}
+		if (isPng && !bytes) {
+			const pct = Math.round(((estPng - estJpeg) / estPng) * 100);
+			return { text: `\u2212${pct}% as JPEG 85%`, pct };
+		}
+		return null;
+	}
+
+	_renderAssetsPane(editorEl, row) {
+		editorEl.classList.add('pm__adv');
+		const data = this._collectAssets();
+		const view = (row && row.view) || 'overview';
+
+		const shell = document.createElement('div');
+		shell.className = 'pm__adv-shell';
+		shell.dataset.view = view;
+
+		if (!data.hasModel) {
+			const empty = document.createElement('p');
+			empty.className = 'pm__empty';
+			empty.innerHTML =
+				'<em>No model loaded.</em> Drop a glTF/GLB onto the viewer to inspect and swap its assets.';
+			shell.appendChild(empty);
+			editorEl.appendChild(shell);
+			return;
+		}
+
+		if (row.type === 'asset-summary') {
+			this._renderAssetSummary(shell, data);
+		} else if (view === 'images') {
+			this._renderAssetGroup(shell, 'images', data.images);
+		} else if (view === 'textures') {
+			this._renderAssetGroup(shell, 'textures', data.textures);
+		} else if (view === 'buffers') {
+			this._renderAssetGroup(shell, 'buffers', data.buffers);
+		} else if (view === 'meshes') {
+			this._renderAssetGroup(shell, 'meshes', data.meshes);
+		} else if (view === 'materials') {
+			this._renderAssetGroup(shell, 'materials', data.materials);
+		} else {
+			this._renderAssetSummary(shell, data);
+		}
+
+		editorEl.appendChild(shell);
+	}
+
+	_renderAssetSummary(shell, data) {
+		const imgBytes = data.images.reduce((s, i) => s + (i.bytes || 0), 0);
+		const bufBytes = data.buffers.reduce((s, b) => s + (b.bytes || 0), 0);
+		const gpuBytes = data.images.reduce(
+			(s, i) => s + this._estGpuBytes(i.width, i.height),
+			0,
+		);
+		let saved = 0;
+		let baseline = 0;
+		data.images.forEach((img) => {
+			baseline += img.bytes || 0;
+			const hint = this._suggestOptimization(img);
+			if (hint && img.bytes) saved += Math.round((img.bytes * hint.pct) / 100);
+		});
+		const savingsPct = baseline ? Math.round((saved / baseline) * 100) : 0;
+
+		const cells = [
+			{ label: 'Images', value: String(data.images.length) },
+			{ label: 'Textures', value: String(data.textures.length) },
+			{ label: 'Buffers', value: String(data.buffers.length) },
+			{ label: 'Meshes', value: String(data.meshes.length) },
+			{ label: 'Materials', value: String(data.materials.length) },
+			{ label: 'Image Bytes', value: this._formatKB(imgBytes) },
+			{ label: 'Buffer Bytes', value: this._formatKB(bufBytes) },
+			{ label: 'Est. GPU Mem', value: this._formatKB(gpuBytes) },
+		];
+
+		const head = document.createElement('div');
+		head.className = 'pm__adv-head';
+		head.innerHTML = `
+			<div class="pm__adv-head-left">
+				<div class="pm__adv-eyebrow">ASSET INVENTORY</div>
+				<div class="pm__adv-title">ALL RESOURCES</div>
+			</div>
+			<div class="pm__adv-head-right">
+				<span class="pm__adv-savings-label">POTENTIAL SAVINGS</span>
+				<span class="pm__asset-savings pm__asset-savings--big"></span>
+			</div>
+		`;
+		head.querySelector('.pm__asset-savings').textContent = savingsPct
+			? `\u2212${savingsPct}%`
+			: '\u22120%';
+		shell.appendChild(head);
+
+		const grid = document.createElement('div');
+		grid.className = 'pm__adv-summary-grid';
+		cells.forEach((c) => {
+			const cell = document.createElement('div');
+			cell.className = 'pm__adv-summary-cell';
+			cell.innerHTML = `
+				<span class="pm__adv-summary-label"></span>
+				<span class="pm__adv-summary-value"></span>
+			`;
+			cell.querySelector('.pm__adv-summary-label').textContent = c.label.toUpperCase();
+			cell.querySelector('.pm__adv-summary-value').textContent = c.value;
+			grid.appendChild(cell);
+		});
+		shell.appendChild(grid);
+
+		const jump = document.createElement('div');
+		jump.className = 'pm__adv-jump';
+		[
+			['Images', 'adv-images'],
+			['Textures', 'adv-textures'],
+			['Buffers', 'adv-buffers'],
+			['Meshes', 'adv-meshes'],
+			['Materials', 'adv-materials'],
+		].forEach(([label, key]) => {
+			const b = document.createElement('button');
+			b.type = 'button';
+			b.className = 'pm__adv-jump-btn';
+			b.textContent = label.toUpperCase();
+			b.addEventListener('click', () => this._jumpToAdvRow(key));
+			jump.appendChild(b);
+		});
+		shell.appendChild(jump);
+	}
+
+	_jumpToAdvRow(rowKey) {
+		const rows = this.schema.advanced && this.schema.advanced.rows;
+		if (!rows) return;
+		const idx = rows.findIndex((r) => r.key === rowKey);
+		if (idx < 0) return;
+		this._selectRow(idx);
+	}
+
+	_renderAssetGroup(shell, groupKey, items) {
+		const head = document.createElement('div');
+		head.className = 'pm__adv-head';
+
+		const groupLabel = groupKey.toUpperCase();
+		const count = items.length;
+
+		if (groupKey === 'images') {
+			let saved = 0;
+			let baseline = 0;
+			items.forEach((img) => {
+				baseline += img.bytes || 0;
+				const hint = this._suggestOptimization(img);
+				if (hint && img.bytes) saved += Math.round((img.bytes * hint.pct) / 100);
+			});
+			const pct = baseline ? Math.round((saved / baseline) * 100) : 0;
+			head.innerHTML = `
+				<div class="pm__adv-head-left">
+					<div class="pm__adv-eyebrow">${count} ITEM${count === 1 ? '' : 'S'}</div>
+					<div class="pm__adv-title">${groupLabel}</div>
+				</div>
+				<div class="pm__adv-head-right">
+					<span class="pm__adv-savings-label">POTENTIAL SAVINGS</span>
+					<span class="pm__asset-savings pm__asset-savings--big"></span>
+				</div>
+			`;
+			head.querySelector('.pm__asset-savings').textContent = pct
+				? `\u2212${pct}%`
+				: '\u22120%';
+		} else {
+			head.innerHTML = `
+				<div class="pm__adv-head-left">
+					<div class="pm__adv-eyebrow">${count} ITEM${count === 1 ? '' : 'S'}</div>
+					<div class="pm__adv-title">${groupLabel}</div>
+				</div>
+			`;
+		}
+		shell.appendChild(head);
+
+		const list = document.createElement('div');
+		list.className = 'pm__asset-list';
+
+		if (!items.length) {
+			const empty = document.createElement('div');
+			empty.className = 'pm__empty pm__asset-empty';
+			empty.textContent = `No ${groupLabel.toLowerCase()} in this model.`;
+			list.appendChild(empty);
+			shell.appendChild(list);
+			return;
+		}
+
+		items.forEach((item) => {
+			const rowEl = this._renderAssetRow(groupKey, item);
+			list.appendChild(rowEl);
+		});
+		shell.appendChild(list);
+	}
+
+	_renderAssetRow(groupKey, item) {
+		const rowEl = document.createElement('div');
+		rowEl.className = 'pm__asset-row';
+		rowEl.dataset.group = groupKey;
+
+		const thumb = document.createElement('div');
+		thumb.className = 'pm__asset-thumb';
+		if (groupKey === 'images' && item.previewUrl) {
+			const img = document.createElement('img');
+			img.src = item.previewUrl;
+			img.alt = '';
+			img.loading = 'lazy';
+			thumb.appendChild(img);
+		} else if (
+			groupKey === 'textures' &&
+			item.texture &&
+			item.texture.image &&
+			item.texture.image.src
+		) {
+			const img = document.createElement('img');
+			img.src = item.texture.image.src;
+			img.alt = '';
+			img.loading = 'lazy';
+			thumb.appendChild(img);
+		} else {
+			const icon = document.createElement('span');
+			icon.className = 'pm__asset-thumb-icon';
+			icon.textContent =
+				{
+					images: 'IMG',
+					textures: 'TEX',
+					buffers: 'BIN',
+					meshes: 'MSH',
+					materials: 'MAT',
+				}[groupKey] || '\u2014';
+			thumb.appendChild(icon);
+		}
+		rowEl.appendChild(thumb);
+
+		const meta = document.createElement('div');
+		meta.className = 'pm__asset-meta';
+
+		const makeLine = (label, value) => {
+			const line = document.createElement('div');
+			line.className = 'pm__asset-meta-line';
+			line.innerHTML = `
+				<span class="pm__asset-meta-label"></span>
+				<span class="pm__asset-meta-value"></span>
+			`;
+			line.querySelector('.pm__asset-meta-label').textContent = String(label).toUpperCase();
+			line.querySelector('.pm__asset-meta-value').textContent = value;
+			return line;
+		};
+
+		const nameLine = document.createElement('div');
+		nameLine.className = 'pm__asset-name';
+		nameLine.textContent = String(item.name || '').toUpperCase();
+		meta.appendChild(nameLine);
+
+		const stats = document.createElement('div');
+		stats.className = 'pm__asset-stats';
+
+		if (groupKey === 'images') {
+			stats.appendChild(makeLine('Type', item.type));
+			stats.appendChild(
+				makeLine('Size', `${item.width || '\u2014'} \u00D7 ${item.height || '\u2014'}`),
+			);
+			stats.appendChild(makeLine('Bytes', this._formatKB(item.bytes)));
+			stats.appendChild(
+				makeLine('GPU', this._formatKB(this._estGpuBytes(item.width, item.height))),
+			);
+			const hint = this._suggestOptimization(item);
+			if (hint) {
+				const line = document.createElement('div');
+				line.className = 'pm__asset-meta-line';
+				const label = document.createElement('span');
+				label.className = 'pm__asset-meta-label';
+				label.textContent = 'HINT';
+				const savings = document.createElement('span');
+				savings.className = 'pm__asset-savings';
+				savings.textContent = hint.text;
+				line.appendChild(label);
+				line.appendChild(savings);
+				stats.appendChild(line);
+			}
+		} else if (groupKey === 'textures') {
+			stats.appendChild(makeLine('Slot', item.slot));
+			stats.appendChild(
+				makeLine('Size', `${item.width || '\u2014'} \u00D7 ${item.height || '\u2014'}`),
+			);
+			stats.appendChild(makeLine('Flip Y', item.flipY ? 'ON' : 'OFF'));
+			stats.appendChild(makeLine('Aniso', String(item.anisotropy || 1)));
+		} else if (groupKey === 'buffers') {
+			stats.appendChild(makeLine('Type', 'BIN'));
+			stats.appendChild(makeLine('Bytes', this._formatKB(item.bytes)));
+			if (item.uri) stats.appendChild(makeLine('URI', item.uri));
+		} else if (groupKey === 'meshes') {
+			stats.appendChild(makeLine('Primitives', String(item.primitives)));
+			stats.appendChild(makeLine('Verts', item.verts.toLocaleString()));
+			stats.appendChild(makeLine('Tris', item.tris.toLocaleString()));
+		} else if (groupKey === 'materials') {
+			stats.appendChild(makeLine('Maps', String(item.mapCount)));
+			stats.appendChild(makeLine('Alpha', item.alphaMode));
+			stats.appendChild(makeLine('2-Sided', item.doubleSided ? 'YES' : 'NO'));
+		}
+		meta.appendChild(stats);
+		rowEl.appendChild(meta);
+
+		const actions = document.createElement('div');
+		actions.className = 'pm__asset-actions';
+
+		if (groupKey === 'images' || groupKey === 'buffers') {
+			const dl = document.createElement('button');
+			dl.type = 'button';
+			dl.className = 'pm__asset-btn';
+			dl.textContent = 'DOWNLOAD';
+			dl.addEventListener('click', () => this._downloadAsset(groupKey, item));
+			actions.appendChild(dl);
+		}
+
+		if (groupKey === 'images') {
+			const rep = document.createElement('button');
+			rep.type = 'button';
+			rep.className = 'pm__asset-btn pm__asset-btn--primary';
+			rep.textContent = 'REPLACE';
+			rep.addEventListener('click', () => this._openReplacePicker(item));
+			actions.appendChild(rep);
+
+			const hint = this._suggestOptimization(item);
+			if (hint) {
+				const opt = document.createElement('button');
+				opt.type = 'button';
+				opt.className = 'pm__asset-btn pm__asset-btn--ghost';
+				opt.textContent = 'OPTIMIZE';
+				opt.addEventListener('click', () => this._optimizeImageInPlace(item));
+				actions.appendChild(opt);
+			}
+		}
+		rowEl.appendChild(actions);
+
+		return rowEl;
+	}
+
+	async _downloadAsset(groupKey, item) {
+		try {
+			if (groupKey === 'images') {
+				let bytes = null;
+				let mime = item.mime || 'image/png';
+				if (this._swappedAssets && this._swappedAssets.has(item.index)) {
+					const swap = this._swappedAssets.get(item.index);
+					bytes = swap.bytes;
+					mime = swap.mime || mime;
+				} else if (item.previewUrl) {
+					const res = await fetch(item.previewUrl);
+					bytes = await res.arrayBuffer();
+					mime = res.headers.get('content-type') || mime;
+				}
+				if (!bytes) {
+					if (window.VIEWER && window.VIEWER.toast) {
+						window.VIEWER.toast('NO BYTES AVAILABLE', { level: 'error' });
+					}
+					return;
+				}
+				const ext = (mime.split('/').pop() || 'png').replace('jpeg', 'jpg');
+				const filename = this._stripExt(item.name) + '.' + ext;
+				this._triggerDownload(new Blob([bytes], { type: mime }), filename);
+			} else if (groupKey === 'buffers') {
+				const parser = window.VIEWER && window.VIEWER.json && window.VIEWER.json.parser;
+				if (!parser || !parser.getDependency) {
+					if (window.VIEWER && window.VIEWER.toast) {
+						window.VIEWER.toast('PARSER UNAVAILABLE', { level: 'error' });
+					}
+					return;
+				}
+				const ab = await parser.getDependency('buffer', item.index);
+				const filename = this._stripExt(item.name) + '.bin';
+				this._triggerDownload(new Blob([ab], { type: 'application/octet-stream' }), filename);
+			}
+			if (window.VIEWER && window.VIEWER.toast) {
+				window.VIEWER.toast(`DOWNLOADED \u00B7 ${String(item.name).toUpperCase()}`, {
+					level: 'success',
+					duration: 1800,
+				});
+			}
+		} catch (e) {
+			console.error('[advanced] download failed', e);
+			if (window.VIEWER && window.VIEWER.toast) {
+				window.VIEWER.toast('DOWNLOAD FAILED', { level: 'error' });
+			}
+		}
+	}
+
+	_stripExt(name) {
+		return String(name || 'asset').replace(/\.[a-z0-9]+$/i, '');
+	}
+
+	_triggerDownload(blob, filename) {
+		const url = URL.createObjectURL(blob);
+		const a = document.createElement('a');
+		a.href = url;
+		a.download = filename;
+		document.body.appendChild(a);
+		a.click();
+		document.body.removeChild(a);
+		setTimeout(() => URL.revokeObjectURL(url), 4000);
+	}
+
+	_openReplacePicker(item) {
+		let input = this._replaceInput;
+		if (!input) {
+			input = document.createElement('input');
+			input.type = 'file';
+			input.accept = 'image/*';
+			input.style.position = 'fixed';
+			input.style.left = '-10000px';
+			input.style.top = '-10000px';
+			input.style.opacity = '0';
+			document.body.appendChild(input);
+			this._replaceInput = input;
+		}
+		input.onchange = (e) => {
+			const file = e.target.files && e.target.files[0];
+			input.value = '';
+			if (!file) return;
+			this._handleReplaceFile(item, file);
+		};
+		input.click();
+	}
+
+	async _handleReplaceFile(item, file) {
+		try {
+			const buf = await file.arrayBuffer();
+			const blobUrl = URL.createObjectURL(
+				new Blob([buf], { type: file.type || item.mime }),
+			);
+
+			const oldTex = item.texture || this._findTextureForImageIndex(item.index);
+			const newTex = new Texture();
+			const imgEl = new Image();
+			imgEl.crossOrigin = 'anonymous';
+			imgEl.onload = () => {
+				newTex.image = imgEl;
+				if (oldTex) {
+					newTex.wrapS = oldTex.wrapS;
+					newTex.wrapT = oldTex.wrapT;
+					newTex.magFilter = oldTex.magFilter;
+					newTex.minFilter = oldTex.minFilter;
+					newTex.anisotropy = oldTex.anisotropy;
+					newTex.flipY = oldTex.flipY;
+					newTex.colorSpace = oldTex.colorSpace;
+					newTex.generateMipmaps = oldTex.generateMipmaps;
+					newTex.name = oldTex.name || file.name;
+				}
+				newTex.needsUpdate = true;
+
+				// Swap across every material that referenced the old texture.
+				let swapCount = 0;
+				const scene = (window.VIEWER && window.VIEWER.scene) || this.content;
+				if (scene && oldTex) {
+					scene.traverse((node) => {
+						const mats = Array.isArray(node.material)
+							? node.material
+							: node.material
+								? [node.material]
+								: [];
+						mats.forEach((m) => {
+							if (!m) return;
+							for (const key in m) {
+								if (m[key] === oldTex) {
+									m[key] = newTex;
+									m.needsUpdate = true;
+									swapCount++;
+								}
+							}
+						});
+					});
+				}
+
+				if (!this._swappedAssets) this._swappedAssets = new Map();
+				this._swappedAssets.set(item.index, {
+					bytes: buf,
+					mime: file.type || item.mime,
+					filename: file.name,
+				});
+
+				if (window.VIEWER && window.VIEWER.toast) {
+					window.VIEWER.toast(
+						`ASSET REPLACED \u00B7 ${String(item.name).toUpperCase()}${swapCount ? ` (\u00D7${swapCount})` : ''}`,
+						{ level: 'success', duration: 2400 },
+					);
+				}
+
+				// Re-render the pane to reflect new bytes + thumbnail.
+				this._renderPane();
+			};
+			imgEl.onerror = () => {
+				URL.revokeObjectURL(blobUrl);
+				if (window.VIEWER && window.VIEWER.toast) {
+					window.VIEWER.toast('DECODE FAILED', { level: 'error' });
+				}
+			};
+			imgEl.src = blobUrl;
+		} catch (e) {
+			console.error('[advanced] replace failed', e);
+			if (window.VIEWER && window.VIEWER.toast) {
+				window.VIEWER.toast('REPLACE FAILED', { level: 'error' });
+			}
+		}
+	}
+
+	async _optimizeImageInPlace(item) {
+		try {
+			if (!item.previewUrl) {
+				if (window.VIEWER && window.VIEWER.toast) {
+					window.VIEWER.toast('NO SOURCE BYTES', { level: 'error' });
+				}
+				return;
+			}
+			const imgEl = new Image();
+			imgEl.crossOrigin = 'anonymous';
+			imgEl.src = item.previewUrl;
+			await new Promise((res, rej) => {
+				imgEl.onload = res;
+				imgEl.onerror = rej;
+			});
+			let w = imgEl.naturalWidth || imgEl.width;
+			let h = imgEl.naturalHeight || imgEl.height;
+			const maxDim = Math.max(w, h);
+			if (maxDim > 1024) {
+				const s = 1024 / maxDim;
+				w = Math.round(w * s);
+				h = Math.round(h * s);
+			}
+			const canvas = document.createElement('canvas');
+			canvas.width = w;
+			canvas.height = h;
+			const ctx = canvas.getContext('2d');
+			ctx.drawImage(imgEl, 0, 0, w, h);
+			const blob = await new Promise((res) =>
+				canvas.toBlob(res, 'image/jpeg', 0.85),
+			);
+			if (!blob) {
+				if (window.VIEWER && window.VIEWER.toast) {
+					window.VIEWER.toast('OPTIMIZE FAILED', { level: 'error' });
+				}
+				return;
+			}
+			const file = new File([blob], this._stripExt(item.name) + '.jpg', {
+				type: 'image/jpeg',
+			});
+			await this._handleReplaceFile(item, file);
+		} catch (e) {
+			console.error('[advanced] optimize failed', e);
+			if (window.VIEWER && window.VIEWER.toast) {
+				window.VIEWER.toast('OPTIMIZE FAILED', { level: 'error' });
+			}
+		}
+	}
+
 	_refreshRowValueOnly() {
 		const row = this.schema[this.ui.activeTab].rows[this.ui.activeRow];
 		const sel = `[data-row="${this.ui.activeRow}"] .pm__row-value`;
 		const el = this.ui.railEl.querySelector(sel);
 		if (!el || !row) return;
-		el.textContent = this._formatValue(row);
+		if (row.icon) {
+			// Row value slot hosts an inline SVG — keep it, just flash.
+		} else {
+			el.textContent = this._formatValue(row);
+		}
 		// Flash amber for 180ms then fade back.
 		el.classList.remove('pm__row-value--flash');
 		// Force reflow so re-adding the class restarts the transition.
@@ -2988,6 +4120,18 @@ export class Viewer {
 		document.body.dataset.menuOpen = open ? 'true' : 'false';
 		const toggle = document.getElementById('pm-toggle');
 		if (toggle) toggle.hidden = !!open;
+		// Split-view: opening/closing the pause menu changes the visible
+		// viewport size (menu occupies the left 60% on wide screens), so
+		// the three.js renderer needs to re-measure its container. One
+		// rAF after the DOM flag flip lets layout settle before we read
+		// clientWidth/clientHeight in resize().
+		if (typeof requestAnimationFrame === 'function') {
+			requestAnimationFrame(() => {
+				try { this.resize(); } catch (e) {}
+			});
+		} else {
+			try { this.resize(); } catch (e) {}
+		}
 	}
 
 	_onKey(e) {
@@ -3103,7 +4247,11 @@ export class Viewer {
 		// Per-frame FPS/ms: smoothed EMA of instantaneous 1000/dt, plus raw ms.
 		let prev = performance.now();
 		let fpsEma = 60;
-		let lastRender = 0;
+		let lastDomUpdate = 0;
+		// DOM write cadence: 2Hz (every 500ms) — keeps the readout legible and
+		// avoids flickering digits. Rolling buffers are still sampled every
+		// frame below, so sparklines stay accurate.
+		const DOM_UPDATE_INTERVAL_MS = 500;
 
 		const tick = (t) => {
 			const dt = Math.max(0.5, t - prev);
@@ -3121,6 +4269,7 @@ export class Viewer {
 					? performance.memory.usedJSHeapSize / (1024 * 1024)
 					: 0;
 
+			// Sample every frame → accurate sparklines.
 			push('fps', fpsEma);
 			push('ms', dt);
 			push('tris', tri);
@@ -3129,9 +4278,9 @@ export class Viewer {
 			push('geo', geo);
 			push('tex', tex);
 
-			// Refresh DOM ~10Hz (every ~100ms) to keep readout stable + cheap.
-			if (t - lastRender >= 100) {
-				lastRender = t;
+			// Throttle DOM text + sparkline redraws to 2Hz (every 500ms).
+			if (t - lastDomUpdate >= DOM_UPDATE_INTERVAL_MS) {
+				lastDomUpdate = t;
 				const fpsRounded = Math.round(fpsEma);
 				if (fpsEl) fpsEl.textContent = fpsRounded;
 				if (trisEl) trisEl.textContent = tri.toLocaleString();

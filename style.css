@@ -310,16 +310,36 @@ html, body {
 
 /* =============================================================
  * Pause menu overlay
+ * Split-view (GTA V map-tab pattern): menu occupies the LEFT 60%
+ * so the live 3D viewport remains visible — and orbitable — on the
+ * RIGHT 40%. On narrow screens (<900px) we fall back to fullscreen.
  * ============================================================= */
 .pm {
 	position: fixed;
-	inset: 0;
+	top: 0;
+	bottom: 0;
+	left: 0;
+	/* Fullscreen on narrow screens; split applied in min-width query below */
+	right: 0;
 	z-index: 10;
 	display: flex;
 	flex-direction: column;
 	color: var(--text);
 	animation: pm-fade-in var(--dur-intro) var(--ease-gta) both;
 	pointer-events: auto;
+}
+
+@media (min-width: 900px) {
+	/* Left-side panel: clamp(560px, 60%, 960px). The right strip is
+	 * outside the .pm element entirely, so pointer events pass through
+	 * to the canvas (OrbitControls remain live). */
+	.pm {
+		right: auto;
+		width: clamp(560px, 60%, 960px);
+		/* Subtle GTA V right-edge separator: hairline + soft outer shadow */
+		border-right: 1px solid var(--divider);
+		box-shadow: 6px 0 24px rgba(0, 0, 0, 0.5);
+	}
 }
 
 body[data-menu-open="false"] .pm {
@@ -341,13 +361,16 @@ body:not(.has-model) .pm__toggle {
 	display: none !important;
 }
 
-/* Blurred/desaturated backdrop (the "frozen world" effect) */
+/* Backdrop sits behind the LEFT panel only (because .pm is clipped to
+ * the left 60% on wide screens). Lighter filter — the split already
+ * does the heavy lifting of separating UI from viewport, so the panel
+ * can feel less oppressive than the old full-screen grayscale. */
 .pm__backdrop {
 	position: absolute;
 	inset: 0;
 	background: var(--bg);
-	backdrop-filter: grayscale(1) blur(6px) brightness(0.35);
-	-webkit-backdrop-filter: grayscale(1) blur(6px) brightness(0.35);
+	backdrop-filter: grayscale(0.3) blur(2px) brightness(0.5);
+	-webkit-backdrop-filter: grayscale(0.3) blur(2px) brightness(0.5);
 	z-index: 0;
 	pointer-events: none;
 }
@@ -486,33 +509,6 @@ body:not(.has-model) .pm__toggle {
 }
 .pm__rail::-webkit-scrollbar { display: none; }
 
-/* Scroll fade indicators — shown when rail has >10 rows (class toggled in JS) */
-.pm__rail--scrollable::before,
-.pm__rail--scrollable::after {
-	content: '';
-	position: sticky;
-	left: 0;
-	right: 0;
-	display: block;
-	height: 28px;
-	pointer-events: none;
-	z-index: 2;
-	margin-left: -1px;
-	margin-right: -1px;
-}
-.pm__rail--scrollable::before {
-	top: 0;
-	margin-top: -24px;
-	margin-bottom: -28px;
-	background: linear-gradient(to bottom, rgba(0,0,0,0.95) 0%, rgba(0,0,0,0) 100%);
-}
-.pm__rail--scrollable::after {
-	bottom: 0;
-	margin-top: -28px;
-	margin-bottom: -24px;
-	background: linear-gradient(to top, rgba(0,0,0,0.95) 0%, rgba(0,0,0,0) 100%);
-}
-
 .pm__rail-title {
 	padding: 0 32px 16px;
 	font-size: var(--fs-meta);
@@ -638,6 +634,47 @@ body:not(.has-model) .pm__toggle {
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
+}
+
+/* Inline camera-preset icon sits in the row-value slot.
+ * Inherits `color` from the row so it tints amber on hover
+ * and flips to black (--focus-fg) when the row is selected. */
+.pm__row-icon {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 18px;
+	height: 18px;
+	line-height: 0;
+	color: inherit;
+	transition: color var(--dur-snap) linear;
+}
+.pm__row-icon svg {
+	display: block;
+	width: 14px;
+	height: 14px;
+}
+.pm__row:hover .pm__row-icon { color: var(--accent); }
+.pm__row[aria-selected="true"] .pm__row-icon { color: var(--focus-fg); }
+
+/* Big icon preview in the pane (shown above description + action button
+ * for camera presets) so the user can see what the view looks like. */
+.pm__icon-preview {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 56px;
+	height: 56px;
+	margin: 0 0 16px;
+	padding: 8px;
+	border: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+	background: var(--hover, rgba(255, 255, 255, 0.04));
+	color: var(--accent);
+}
+.pm__icon-preview svg {
+	display: block;
+	width: 40px;
+	height: 40px;
 }
 
 /* =============================================================
@@ -865,8 +902,11 @@ body:not(.has-model) .pm__toggle {
 	letter-spacing: 0.02em;
 	line-height: 1.5;
 	color: var(--text-dim);
-	max-width: 48ch;
-	margin-top: 16px;
+	max-width: 52ch;
+	margin-top: 20px;
+	padding-left: 12px;
+	border-left: 2px solid var(--accent);
+	background: rgba(255, 255, 255, 0.02);
 	text-transform: none;
 }
 
@@ -1006,18 +1046,35 @@ body:not(.has-model) .pm__toggle {
 }
 
 /* =============================================================
- * Toggle button (shown when menu hidden) — top-right, discoverable
+ * Top-right cluster wrapper — groups the performance HUD and the
+ * MENU button into one coherent unit so they visually read as a
+ * matched pair (shared height, shared bg, single divider gap).
+ * Acts as the positioning anchor for the expanded HUD dropdown.
  * ============================================================= */
-.pm__toggle {
+.topbar-cluster {
 	position: fixed;
 	top: 16px;
 	right: 16px;
 	z-index: 20;
+	display: flex;
+	align-items: stretch;
+	gap: 8px;
+	height: 40px;
+}
+
+/* =============================================================
+ * Toggle button (shown when menu hidden) — lives inside the
+ * cluster, static positioning, matched height + background with
+ * the HUD so they form one pair.
+ * ============================================================= */
+.pm__toggle {
+	position: static;
 	display: inline-flex;
 	align-items: center;
 	gap: 8px;
-	padding: 8px 14px;
-	background: rgba(0, 0, 0, 0.72);
+	height: 40px;
+	padding: 0 14px;
+	background: rgba(0, 0, 0, 0.85);
 	border: 1px solid var(--divider);
 	border-radius: 0;
 	color: var(--text);
@@ -1045,22 +1102,20 @@ body[data-menu-open="false"] .pm__toggle { display: inline-flex; }
 body[data-menu-open="false"] .pm__toggle[hidden] { display: inline-flex; }
 
 /* =============================================================
- * Performance HUD — permanent top-right readout, sits to the LEFT
- * of the MENU button to form one visual cluster.
+ * Performance HUD — compact horizontal readout inside the top-right
+ * cluster, sharing height/bg with the MENU button. Click to expand
+ * into a dropdown panel that drops DOWN (absolutely positioned off
+ * the cluster) so it never pushes the MENU button around.
  * Visible only after first model load (body.has-model) and never
- * while the pause menu is open (we don't want to double-display).
+ * while the pause menu is open (no double-display).
  * ============================================================= */
 body:not(.has-model) .hud { display: none !important; }
 body[data-menu-open="true"] .hud { display: none !important; }
 
 .hud {
-	position: fixed;
-	top: 16px;
-	/* Leaves a generous gap for the MENU button (~82-96px wide + 16px edge + 10px gap). */
-	right: 124px;
-	z-index: 20;
-	width: 220px;
-	padding: 8px 10px;
+	position: static;
+	height: 40px;
+	padding: 0 14px;
 	background: rgba(0, 0, 0, 0.85);
 	border: 1px solid var(--divider);
 	color: var(--text);
@@ -1073,10 +1128,11 @@ body[data-menu-open="true"] .hud { display: none !important; }
 	-webkit-backdrop-filter: blur(4px);
 	cursor: pointer;
 	user-select: none;
-	display: flex;
-	flex-direction: column;
+	display: inline-flex;
+	flex-direction: row;
+	align-items: center;
 	gap: 0;
-	transition: width var(--dur-cross) var(--ease-gta), border-color var(--dur-snap) linear;
+	transition: border-color var(--dur-snap) linear;
 }
 
 .hud[hidden] { display: none !important; }
@@ -1084,19 +1140,30 @@ body[data-menu-open="true"] .hud { display: none !important; }
 .hud:hover { border-color: color-mix(in srgb, var(--accent) 55%, var(--divider)); }
 .hud:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
-.hud--expanded { width: 360px; }
-
+/* Compact HUD: single horizontal row — FPS 60 · MS 16.6 · CALLS 12. */
 .hud__row {
-	display: flex;
+	display: inline-flex;
 	align-items: center;
-	justify-content: space-between;
-	gap: 12px;
-	height: 24px;
-	padding: 0 2px;
-	border-top: 1px solid rgba(95, 95, 95, 0.35);
+	gap: 6px;
+	height: 100%;
+	padding: 0 10px;
+	position: relative;
 }
 
-.hud__row:first-child { border-top: 0; }
+/* Thin hairline separator between adjacent compact rows. */
+.hud:not(.hud--expanded) .hud__row + .hud__row::before {
+	content: '';
+	position: absolute;
+	left: 0;
+	top: 25%;
+	bottom: 25%;
+	width: 1px;
+	background: rgba(95, 95, 95, 0.45);
+}
+
+/* First row has no leading padding (tight to border). */
+.hud:not(.hud--expanded) .hud__row:first-child { padding-left: 0; }
+.hud:not(.hud--expanded) .hud__row:last-child { padding-right: 0; }
 
 .hud__label {
 	flex: 0 0 auto;
@@ -1108,7 +1175,7 @@ body[data-menu-open="true"] .hud { display: none !important; }
 }
 
 .hud__value {
-	flex: 1 1 auto;
+	flex: 0 0 auto;
 	text-align: right;
 	color: var(--accent);
 	font-weight: 500;
@@ -1127,6 +1194,42 @@ body[data-menu-open="true"] .hud { display: none !important; }
 	overflow: visible;
 }
 
+/* ----- Expanded dropdown panel ----- */
+/* When expanded, the HUD becomes an absolutely-positioned panel that
+ * drops down below the cluster, so the MENU button stays put. */
+.hud.hud--expanded {
+	position: absolute;
+	top: calc(100% + 6px);
+	right: 0;
+	left: auto;
+	height: auto;
+	width: 360px;
+	padding: 8px 10px;
+	flex-direction: column;
+	align-items: stretch;
+	gap: 0;
+	box-shadow: 0 6px 24px rgba(0, 0, 0, 0.55);
+}
+
+.hud.hud--expanded .hud__row {
+	display: flex;
+	flex-direction: row;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+	height: 24px;
+	padding: 0 2px;
+	border-top: 1px solid rgba(95, 95, 95, 0.35);
+}
+
+.hud.hud--expanded .hud__row:first-child { border-top: 0; }
+.hud.hud--expanded .hud__row::before { content: none; }
+
+.hud.hud--expanded .hud__value {
+	flex: 1 1 auto;
+	text-align: right;
+}
+
 .hud--expanded .hud__chart { display: block; }
 
 .hud__chart path.hud__chart-line {
@@ -1142,7 +1245,7 @@ body[data-menu-open="true"] .hud { display: none !important; }
 	stroke: none;
 }
 
-/* Hide non-essential rows in compact mode (keep FPS, MS, CALLS) */
+/* Hide non-essential metrics in compact mode (keep FPS, MS, CALLS). */
 .hud:not(.hud--expanded) .hud__row[data-metric="tris"],
 .hud:not(.hud--expanded) .hud__row[data-metric="geo"],
 .hud:not(.hud--expanded) .hud__row[data-metric="tex"],
@@ -1242,6 +1345,19 @@ body[data-menu-open="true"] .hud { display: none !important; }
 }
 
 .report-toggle-fix:hover {
+	background: var(--hover);
+	color: var(--text);
+}
+
+/* The "DOWNLOAD FIXED GLB" variant reuses .report-toggle-fix geometry and
+ * the same left-divider treatment so the two pill-buttons read as a pair,
+ * but tints in a different accent color so the user can distinguish which
+ * action they're about to trigger at a glance. */
+.report-toggle-fix.report-toggle-download {
+	color: var(--accent-2, #65B4D4);
+}
+
+.report-toggle-fix.report-toggle-download:hover {
 	background: var(--hover);
 	color: var(--text);
 }
@@ -2399,4 +2515,271 @@ body[data-menu-open="true"] .hud { display: none !important; }
 
 @media (max-width: 600px) {
 	.pm__map-stats { grid-template-columns: 1fr; }
+}
+
+/* =============================================================
+ * ADVANCED tab — per-asset inspector / swap
+ * ============================================================= */
+.pm__adv { padding-bottom: 24px; }
+.pm__adv-shell {
+	display: flex;
+	flex-direction: column;
+	gap: 16px;
+	font-variant-numeric: tabular-nums;
+}
+
+.pm__adv-head {
+	display: flex;
+	align-items: flex-end;
+	justify-content: space-between;
+	gap: 16px;
+	padding-bottom: 12px;
+	border-bottom: 1px solid var(--divider);
+}
+.pm__adv-head-left { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.pm__adv-eyebrow {
+	font-size: var(--fs-meta);
+	letter-spacing: var(--tracking-loose);
+	color: var(--text-dim);
+	text-transform: uppercase;
+}
+.pm__adv-title {
+	font-size: 1.375rem;
+	font-weight: 600;
+	letter-spacing: var(--tracking);
+	text-transform: uppercase;
+	color: var(--text);
+}
+.pm__adv-head-right {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-end;
+	gap: 2px;
+	text-transform: uppercase;
+}
+.pm__adv-savings-label {
+	font-size: 0.6875rem;
+	letter-spacing: var(--tracking-loose);
+	color: var(--text-dim);
+}
+
+.pm__asset-savings {
+	color: var(--accent);
+	font-weight: 600;
+	letter-spacing: var(--tracking);
+	text-transform: uppercase;
+	text-shadow: 0 0 10px var(--accent-glow);
+	font-variant-numeric: tabular-nums;
+}
+.pm__asset-savings--big {
+	font-size: 1.5rem;
+	letter-spacing: var(--tracking);
+}
+
+/* Summary grid (Overview rail row). */
+.pm__adv-summary-grid {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+	gap: 1px;
+	background: var(--divider);
+	border: 1px solid var(--divider);
+}
+.pm__adv-summary-cell {
+	background: rgba(0, 0, 0, 0.5);
+	padding: 12px 14px;
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	min-height: 68px;
+	justify-content: center;
+}
+.pm__adv-summary-label {
+	font-size: 0.6875rem;
+	letter-spacing: var(--tracking-loose);
+	text-transform: uppercase;
+	color: var(--text-dim);
+}
+.pm__adv-summary-value {
+	font-size: 1.25rem;
+	font-weight: 600;
+	letter-spacing: var(--tracking);
+	color: var(--text);
+	font-variant-numeric: tabular-nums;
+}
+
+.pm__adv-jump {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+}
+.pm__adv-jump-btn {
+	background: transparent;
+	border: 1px solid var(--divider);
+	color: var(--text);
+	font-family: inherit;
+	font-size: var(--fs-meta);
+	font-weight: 500;
+	letter-spacing: var(--tracking-loose);
+	text-transform: uppercase;
+	padding: 6px 12px;
+	cursor: pointer;
+	transition: background var(--dur-snap) linear, border-color var(--dur-snap) linear,
+		color var(--dur-snap) linear, box-shadow var(--dur-snap) linear;
+}
+.pm__adv-jump-btn:hover {
+	background: var(--accent);
+	color: var(--focus-fg);
+	border-color: var(--accent);
+	box-shadow: 0 0 12px var(--accent-glow);
+}
+.pm__adv-jump-btn:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: 2px;
+}
+
+/* Scrollable asset list — hairline row dividers. */
+.pm__asset-list {
+	display: flex;
+	flex-direction: column;
+	border-top: 1px solid var(--divider);
+	max-height: calc(100vh - 360px);
+	overflow-y: auto;
+}
+.pm__asset-empty {
+	padding: 20px 12px;
+	text-align: center;
+}
+
+.pm__asset-row {
+	display: grid;
+	grid-template-columns: 72px minmax(0, 1fr) auto;
+	gap: 16px;
+	align-items: center;
+	min-height: 72px;
+	padding: 8px 4px;
+	border-bottom: 1px solid var(--divider);
+	transition: background var(--dur-snap) linear;
+}
+.pm__asset-row:hover {
+	background: color-mix(in srgb, var(--accent) 5%, transparent);
+}
+
+.pm__asset-thumb {
+	width: 56px;
+	height: 56px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	background: rgba(0, 0, 0, 0.55);
+	border: 1px solid var(--divider);
+	overflow: hidden;
+	justify-self: center;
+}
+.pm__asset-thumb img {
+	width: 100%;
+	height: 100%;
+	object-fit: cover;
+	display: block;
+	image-rendering: auto;
+}
+.pm__asset-thumb-icon {
+	font-size: 0.75rem;
+	font-weight: 600;
+	letter-spacing: var(--tracking-loose);
+	color: var(--text-dim);
+	text-transform: uppercase;
+}
+
+.pm__asset-meta {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	min-width: 0;
+}
+.pm__asset-name {
+	font-size: var(--fs-row);
+	font-weight: 600;
+	letter-spacing: var(--tracking);
+	color: var(--text);
+	text-transform: uppercase;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.pm__asset-stats {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 2px 16px;
+	font-size: var(--fs-meta);
+	letter-spacing: var(--tracking-loose);
+	font-variant-numeric: tabular-nums;
+}
+.pm__asset-meta-line {
+	display: inline-flex;
+	gap: 6px;
+	align-items: baseline;
+	text-transform: uppercase;
+}
+.pm__asset-meta-label {
+	color: var(--text-mute);
+	font-size: 0.6875rem;
+}
+.pm__asset-meta-value {
+	color: var(--text);
+	font-weight: 500;
+}
+
+.pm__asset-actions {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	align-items: stretch;
+	min-width: 112px;
+}
+.pm__asset-btn {
+	background: transparent;
+	border: 1px solid var(--divider);
+	color: var(--text);
+	font-family: inherit;
+	font-size: 0.75rem;
+	font-weight: 500;
+	letter-spacing: var(--tracking-loose);
+	text-transform: uppercase;
+	padding: 6px 10px;
+	cursor: pointer;
+	transition: background var(--dur-snap) linear, border-color var(--dur-snap) linear,
+		color var(--dur-snap) linear, box-shadow var(--dur-snap) linear;
+}
+.pm__asset-btn:hover {
+	background: var(--accent);
+	color: var(--focus-fg);
+	border-color: var(--accent);
+	box-shadow: 0 0 10px var(--accent-glow);
+}
+.pm__asset-btn:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: 2px;
+}
+.pm__asset-btn--primary {
+	border-color: var(--accent);
+	color: var(--accent);
+}
+.pm__asset-btn--primary:hover {
+	background: var(--accent);
+	color: var(--focus-fg);
+}
+.pm__asset-btn--ghost {
+	border-color: var(--text-mute);
+	color: var(--text-dim);
+}
+
+@media (max-width: 900px) {
+	.pm__adv-summary-grid { grid-template-columns: repeat(2, 1fr); }
+	.pm__asset-row { grid-template-columns: 64px minmax(0, 1fr); gap: 12px; }
+	.pm__asset-actions {
+		grid-column: 1 / -1;
+		flex-direction: row;
+		flex-wrap: wrap;
+		min-width: 0;
+	}
 }

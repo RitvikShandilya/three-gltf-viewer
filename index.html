@@ -82,12 +82,14 @@
 		</footer>
 	</section>
 
-	<!-- Top-right control cluster: HUD sits to the LEFT of the MENU button -->
-	<div class="hud" id="hud" role="group" aria-label="Performance HUD" aria-hidden="true" hidden></div>
+	<!-- Top-right control cluster: HUD sits to the LEFT of the MENU button, grouped as one coherent unit -->
+	<div class="topbar-cluster" id="topbar-cluster">
+		<div class="hud" id="hud" role="group" aria-label="Performance HUD" aria-hidden="true" hidden></div>
 
-	<button class="pm__toggle" id="pm-toggle" aria-label="Open settings menu">
-		<span>Menu</span>
-	</button>
+		<button class="pm__toggle" id="pm-toggle" aria-label="Open settings menu">
+			<span>Menu</span>
+		</button>
+	</div>
 
 	<!-- Toast notifications container (for errors/status) -->
 	<div class="pm__toasts" id="pm-toasts" aria-live="polite" aria-atomic="true"></div>

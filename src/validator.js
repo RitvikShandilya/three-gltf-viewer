@@ -119,14 +119,34 @@ export class Validator {
 					window.VIEWER.toast('Fix unavailable: no model loaded.', { level: 'error' });
 				}
 			});
-			// Place the button before the close "x" so it reads
-			// [severity bar] [message] [FIX ISSUES] [×]
+
+			// Separate "DOWNLOAD FIXED GLB" button — clearer than implicitly
+			// downloading after a fix, and still works if the user just wants
+			// to grab the loaded scene as-is (no fix needed).
+			const dlBtn = document.createElement('button');
+			dlBtn.type = 'button';
+			dlBtn.className = 'report-toggle-fix report-toggle-download';
+			dlBtn.textContent = 'DOWNLOAD FIXED GLB';
+			dlBtn.setAttribute('aria-label', 'Download the current scene as a .glb file');
+			dlBtn.addEventListener('click', (e) => {
+				e.stopPropagation();
+				if (window.VIEWER && typeof window.VIEWER.exportGLB === 'function') {
+					window.VIEWER.exportGLB();
+				} else if (window.VIEWER && typeof window.VIEWER.toast === 'function') {
+					window.VIEWER.toast('Export unavailable: no model loaded.', { level: 'error' });
+				}
+			});
+
+			// Place buttons before the close "x" so the pill reads
+			// [severity bar] [message] [FIX ISSUES] [DOWNLOAD FIXED GLB] [×]
 			const toggleInner = this.toggleEl.querySelector('.report-toggle');
 			const closeBtn = this.toggleEl.querySelector('.report-toggle-close');
 			if (toggleInner && closeBtn) {
 				toggleInner.insertBefore(fixBtn, closeBtn);
+				toggleInner.insertBefore(dlBtn, closeBtn);
 			} else if (toggleInner) {
 				toggleInner.appendChild(fixBtn);
+				toggleInner.appendChild(dlBtn);
 			}
 		}
 
