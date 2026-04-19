@@ -65,6 +65,28 @@ const KTX2_LOADER = new KTX2Loader(MANAGER).setTranscoderPath(
 
 const IS_IOS = isIOS();
 
+/**
+ * Coarse-pointer (touch-first) device detection. Used to default expensive
+ * post-processing passes (SSAO, bloom) OFF on mobile, where the GPU budget
+ * is tight and the user usually hasn't opted into eye-candy. Prefer the CSS
+ * media query since it also catches hybrid laptop/tablet devices in touch
+ * mode; fall back to a UA sniff for very old browsers.
+ */
+const IS_MOBILE = (() => {
+	try {
+		if (typeof window !== 'undefined' && window.matchMedia) {
+			if (window.matchMedia('(pointer: coarse)').matches) return true;
+		}
+	} catch (e) {}
+	try {
+		return /Android|iPhone|iPad|iPod|IEMobile|BlackBerry/i.test(
+			(typeof navigator !== 'undefined' && navigator.userAgent) || '',
+		);
+	} catch (e) {
+		return false;
+	}
+})();
+
 const Preset = { ASSET_GENERATOR: 'assetgenerator' };
 
 Cache.enabled = true;
@@ -108,7 +130,11 @@ export class Viewer {
 
 			pointSize: 1.0,
 
-			// Post-processing
+			// Post-processing. Expensive passes (bloom / SSAO) are OFF by
+			// default everywhere; this is doubly important on mobile where
+			// they can halve the framerate. If the user enables SSAO on a
+			// coarse-pointer device we surface a one-time warning toast
+			// (see the ssao schema row below).
 			bloom: false,
 			bloomStrength: 0.5,
 			bloomThreshold: 0.85,
@@ -576,11 +602,19 @@ export class Viewer {
 				cam.position.set(center.x + dist, center.y, center.z);
 				break;
 			case 'iso':
-				cam.position.set(center.x + dist * 0.7, center.y + dist * 0.7, center.z + dist * 0.7);
+				cam.position.set(
+					center.x + dist * 0.7,
+					center.y + dist * 0.7,
+					center.z + dist * 0.7,
+				);
 				break;
 			case 'reset':
 			default:
-				cam.position.set(center.x + size.x / 2, center.y + size.y / 5, center.z + size.z / 2);
+				cam.position.set(
+					center.x + size.x / 2,
+					center.y + size.y / 5,
+					center.z + size.z / 2,
+				);
 				break;
 		}
 		cam.lookAt(center);
@@ -697,9 +731,19 @@ export class Viewer {
 			return Promise.resolve({ envMap: null });
 		}
 
+		// LRU cache for PMREM'd env maps. 4K HDRs produce sizeable GPU
+		// textures, so we keep at most MAX_ENV_CACHE entries — when an entry
+		// is evicted its `envMap.dispose()` is called to release GPU memory.
+		// Map preserves insertion order, which we leverage as LRU order: any
+		// cache hit re-inserts the id so it becomes most-recent.
+		const MAX_ENV_CACHE = 2;
 		this._envCache ||= new Map();
 		if (this._envCache.has(id)) {
-			return Promise.resolve({ envMap: this._envCache.get(id) });
+			const cached = this._envCache.get(id);
+			// Refresh LRU order.
+			this._envCache.delete(id);
+			this._envCache.set(id, cached);
+			return Promise.resolve({ envMap: cached });
 		}
 
 		// Pick loader by explicit `format` hint first, then by URL extension.
@@ -710,17 +754,69 @@ export class Viewer {
 		const isEXR = fmt === '.exr' || /\.exr(\?|$)/i.test(path);
 		const Loader = isEXR ? EXRLoader : RGBELoader;
 
+		// Dev-tools breadcrumb so we can confirm 4K HDRs are fetched on
+		// demand (lazy), not at app startup.
+		if (/_4k\.(hdr|exr)(\?|$)/i.test(path)) {
+			console.info(`[viewer] fetching 4K HDRI lazily: ${id} — ${path}`);
+		}
+
+		// Hook into the App's spinner/progress UI (defined in app.js) so
+		// users see a progress bar while multi-MB HDRs download. We poke
+		// `window.VIEWER.app` rather than coupling Viewer to App directly.
+		const app = typeof window !== 'undefined' && window.VIEWER ? window.VIEWER.app : null;
+		const hasProgressUI =
+			app &&
+			typeof app.showSpinner === 'function' &&
+			typeof app.hideSpinner === 'function' &&
+			typeof app.updateProgress === 'function';
+		if (hasProgressUI) {
+			app.showSpinner();
+			app.updateProgress({ loaded: 0, total: 0 });
+		}
+
 		return new Promise((resolve, reject) => {
 			new Loader().load(
 				path,
 				(texture) => {
 					const envMap = this.pmremGenerator.fromEquirectangular(texture).texture;
 					texture.dispose();
+
+					// Insert as most-recent, then evict oldest entries until
+					// the cache is within bounds. Evicted env maps must have
+					// their GPU memory released.
 					this._envCache.set(id, envMap);
+					while (this._envCache.size > MAX_ENV_CACHE) {
+						const oldestKey = this._envCache.keys().next().value;
+						if (oldestKey === id) break; // safety: never evict what we just added
+						const oldest = this._envCache.get(oldestKey);
+						this._envCache.delete(oldestKey);
+						if (oldest && typeof oldest.dispose === 'function') {
+							// If this envMap is still the active scene env/background,
+							// null those refs first so three.js doesn't try to sample
+							// a disposed texture next frame.
+							if (this.scene && this.scene.environment === oldest) {
+								this.scene.environment = null;
+							}
+							if (this.scene && this.scene.background === oldest) {
+								this.scene.background = this.backgroundColor;
+							}
+							oldest.dispose();
+						}
+					}
+
+					if (hasProgressUI) app.hideSpinner();
 					resolve({ envMap });
 				},
-				undefined,
-				reject,
+				(xhr) => {
+					if (!hasProgressUI) return;
+					const loaded = (xhr && xhr.loaded) || 0;
+					const total = (xhr && xhr.total) || 0;
+					app.updateProgress({ loaded, total });
+				},
+				(err) => {
+					if (hasProgressUI) app.hideSpinner();
+					reject(err);
+				},
 			);
 		});
 	}
@@ -848,8 +944,7 @@ export class Viewer {
 		const ringInner = Math.max(size.x, size.z) * 0.55;
 		const ringOuter = ringInner * 1.04;
 		const ringGeo = new RingGeometry(ringInner, ringOuter, 96);
-		const accentHex =
-			this.state && this.state.accent ? this.state.accent : '#FCB131';
+		const accentHex = this.state && this.state.accent ? this.state.accent : '#FCB131';
 		const ringMat = new MeshBasicMaterial({
 			color: new Color(accentHex),
 			transparent: true,
@@ -1093,7 +1188,8 @@ export class Viewer {
 		}
 
 		const base =
-			(this._originalFilename && String(this._originalFilename).replace(/\.(gltf|glb)$/i, '')) ||
+			(this._originalFilename &&
+				String(this._originalFilename).replace(/\.(gltf|glb)$/i, '')) ||
 			'scene';
 		const filename = `${base}.glb`;
 
@@ -1211,6 +1307,7 @@ export class Viewer {
 			tabsEl: document.getElementById('pm-tabs'),
 			railEl: document.getElementById('pm-rail'),
 			paneEl: document.getElementById('pm-pane'),
+			actionsEl: document.getElementById('pm-actions'),
 			menuAutoOpened: false,
 		};
 		this._buildSchema();
@@ -1239,7 +1336,8 @@ export class Viewer {
 					{
 						key: 'frame',
 						label: 'Frame Model',
-						type: 'action',
+						type: 'camera-preset',
+						preset: 'reset',
 						icon: 'frame',
 						desc: 'Reset the camera to frame the whole model.',
 						run: () => this._cameraPreset('reset'),
@@ -1247,7 +1345,8 @@ export class Viewer {
 					{
 						key: 'top',
 						label: 'Top View',
-						type: 'action',
+						type: 'camera-preset',
+						preset: 'top',
 						icon: 'top',
 						desc: 'Look straight down the Y axis.',
 						run: () => this._cameraPreset('top'),
@@ -1255,7 +1354,8 @@ export class Viewer {
 					{
 						key: 'front',
 						label: 'Front View',
-						type: 'action',
+						type: 'camera-preset',
+						preset: 'front',
 						icon: 'front',
 						desc: 'Look down the +Z axis.',
 						run: () => this._cameraPreset('front'),
@@ -1263,7 +1363,8 @@ export class Viewer {
 					{
 						key: 'side',
 						label: 'Side View',
-						type: 'action',
+						type: 'camera-preset',
+						preset: 'side',
 						icon: 'side',
 						desc: 'Look down the +X axis.',
 						run: () => this._cameraPreset('side'),
@@ -1271,7 +1372,8 @@ export class Viewer {
 					{
 						key: 'back',
 						label: 'Back View',
-						type: 'action',
+						type: 'camera-preset',
+						preset: 'back',
 						icon: 'back',
 						desc: 'Look down the -Z axis.',
 						run: () => this._cameraPreset('back'),
@@ -1279,7 +1381,8 @@ export class Viewer {
 					{
 						key: 'iso',
 						label: 'Isometric',
-						type: 'action',
+						type: 'camera-preset',
+						preset: 'iso',
 						icon: 'iso',
 						desc: 'Classic 3/4 isometric view.',
 						run: () => this._cameraPreset('iso'),
@@ -1536,9 +1639,11 @@ export class Viewer {
 						options: ['Linear', 'ACES Filmic'],
 						values: [LinearToneMapping, ACESFilmicToneMapping],
 						desc: 'How HDR brightness maps to screen. ACES is cinematic.',
-						get: () => (state.toneMapping === ACESFilmicToneMapping ? 'ACES Filmic' : 'Linear'),
+						get: () =>
+							state.toneMapping === ACESFilmicToneMapping ? 'ACES Filmic' : 'Linear',
 						set: (v) => {
-							state.toneMapping = v === 'ACES Filmic' ? ACESFilmicToneMapping : LinearToneMapping;
+							state.toneMapping =
+								v === 'ACES Filmic' ? ACESFilmicToneMapping : LinearToneMapping;
 							this.updateLights();
 						},
 					},
@@ -1680,6 +1785,18 @@ export class Viewer {
 						set: (v) => {
 							state.ssao = v;
 							this._updatePostProcessing();
+							// SSAO is a per-pixel depth-buffer pass and can
+							// tank framerate on mobile GPUs. Warn the user
+							// once per session when they flip it on.
+							if (v && IS_MOBILE && !this._ssaoMobileWarned) {
+								this._ssaoMobileWarned = true;
+								if (window.VIEWER && typeof window.VIEWER.toast === 'function') {
+									window.VIEWER.toast(
+										'SSAO is expensive on mobile · expect lower framerate',
+										{ level: 'info', duration: 4000 },
+									);
+								}
+							}
 						},
 					},
 					{
@@ -2137,6 +2254,7 @@ export class Viewer {
 
 	_formatValue(row) {
 		if (row.type === 'action') return '▶';
+		if (row.type === 'camera-preset') return '▶';
 		if (row.type === 'stats') return '';
 		if (row.type === 'map') return '◉';
 		if (row.type === 'brief') return '◆';
@@ -2224,6 +2342,35 @@ export class Viewer {
 		const rows = this.ui.railEl.querySelectorAll('.pm__row');
 		rows.forEach((el, idx) => el.setAttribute('aria-selected', idx === i ? 'true' : 'false'));
 		this._renderPane();
+		// Soft-apply camera presets as soon as the user picks one in the Map
+		// rail — saves an extra click. The APPLY VIEW button in the right
+		// pane is still there for keyboard-only flow / explicit re-trigger.
+		try {
+			const section = this.schema[this.ui.activeTab];
+			const row = section && section.rows[i];
+			if (
+				row &&
+				row.type === 'camera-preset' &&
+				this.ui.activeTab === 'map' &&
+				this.content &&
+				typeof row.run === 'function'
+			) {
+				row.run();
+			}
+		} catch (e) {}
+		// On mobile (fullscreen menu), the rail and pane stack vertically;
+		// tapping a rail row should bring its editor pane into view so the
+		// user doesn't have to manually scroll down to see what changed.
+		if (window.matchMedia && window.matchMedia('(max-width: 899px)').matches) {
+			const pane = this.ui.paneEl;
+			if (pane && typeof pane.scrollIntoView === 'function') {
+				try {
+					pane.scrollIntoView({ behavior: 'smooth', block: 'start' });
+				} catch (e) {
+					pane.scrollIntoView();
+				}
+			}
+		}
 	}
 
 	_renderPane() {
@@ -2249,6 +2396,7 @@ export class Viewer {
 			inner.querySelector('.pm__pane-sub').textContent = sectionLabel;
 			paneEl.innerHTML = '';
 			paneEl.appendChild(inner);
+			this._renderContextActions();
 			return;
 		}
 
@@ -2278,6 +2426,176 @@ export class Viewer {
 		paneEl.innerHTML = '';
 		paneEl.appendChild(inner);
 		this._renderEditor(row);
+		this._renderContextActions();
+	}
+
+	/**
+	 * Renders the GTA V-style contextual action bar at the bottom-right
+	 * of the pause menu (`#pm-actions`). Actions reflect the currently
+	 * selected row on the active tab, each pairing an uppercase label
+	 * with a compact keyboard hint kbd. On mobile the kbd hides and the
+	 * button itself becomes the tap target.
+	 *
+	 * Always includes BACK [ESC]. Row-type-specific actions layer on
+	 * top (SELECT / TOGGLE / CHANGE / ADJUST / PICK / APPLY VIEW /
+	 * REPLACE + DOWNLOAD). The last (primary) action gets the filled
+	 * white-on-black treatment to mirror GTA V's confirm button.
+	 */
+	_renderContextActions() {
+		const el = this.ui && this.ui.actionsEl;
+		if (!el) return;
+		const tabKey = this.ui.activeTab;
+		const section = this.schema[tabKey];
+		const row = section && section.rows[this.ui.activeRow];
+
+		// Compute the action list for the current context. Ordering:
+		// secondary actions first (left), primary confirm-style last
+		// (right), then the universal BACK action. This matches the
+		// GTA V footer where the anchor "BACK" sits on the far right.
+		const actions = [];
+
+		if (row) {
+			switch (row.type) {
+				case 'action':
+					actions.push({
+						label: 'SELECT',
+						key: '\u21B5' /* ↵ */,
+						primary: true,
+						run: () => row.run && row.run(),
+					});
+					break;
+				case 'camera-preset':
+					// Map tab: camera-preset rows apply the view.
+					actions.push({
+						label: 'APPLY VIEW',
+						key: '\u21B5',
+						primary: true,
+						run: () => row.run && row.run(),
+					});
+					break;
+				case 'bool':
+					actions.push({
+						label: 'TOGGLE',
+						key: '\u2190\u2192' /* ←→ */,
+						primary: true,
+						run: () => {
+							row.set(!row.get());
+							this._renderRail();
+							this._renderPane();
+						},
+					});
+					break;
+				case 'enum':
+					actions.push({
+						label: 'CHANGE',
+						key: '\u2190\u2192',
+						primary: true,
+						run: () => this._cycleEnum(row, 1),
+					});
+					break;
+				case 'num':
+					// No direct action; arrow keys adjust the value.
+					actions.push({
+						label: 'ADJUST',
+						key: '\u2190\u2192',
+						primary: false,
+						run: null,
+					});
+					break;
+				case 'color':
+					actions.push({
+						label: 'PICK',
+						key: '\u21B5',
+						primary: true,
+						run: () => {
+							const input = this.ui.paneEl
+								? this.ui.paneEl.querySelector('.pm__color-input')
+								: null;
+							if (input) {
+								input.focus();
+								if (typeof input.click === 'function') input.click();
+							}
+						},
+					});
+					break;
+				case 'asset':
+					// Advanced tab asset rows — bulk REPLACE / DOWNLOAD
+					// keybindings. Triggers the first visible button of
+					// that kind in the pane for keyboard users.
+					if (tabKey === 'advanced') {
+						actions.push({
+							label: 'REPLACE',
+							key: 'R',
+							primary: false,
+							run: () => this._triggerFirstAssetBtn('replace'),
+						});
+						actions.push({
+							label: 'DOWNLOAD',
+							key: 'D',
+							primary: true,
+							run: () => this._triggerFirstAssetBtn('download'),
+						});
+					}
+					break;
+				case 'asset-summary':
+				case 'brief':
+				case 'map':
+				case 'stats':
+				default:
+					/* No row-type action; BACK remains. */
+					break;
+			}
+		}
+
+		// Universal BACK action (far right — anchor of the GTA V footer).
+		actions.push({
+			label: 'BACK',
+			key: 'ESC',
+			primary: false,
+			run: () => this._setMenuOpen(false),
+		});
+
+		// Render.
+		el.innerHTML = '';
+		actions.forEach((a, i) => {
+			const btn = document.createElement('button');
+			btn.type = 'button';
+			btn.className = 'pm__action' + (a.primary ? ' pm__action--primary' : '');
+			btn.setAttribute('aria-label', `${a.label} (${a.key})`);
+			if (!a.run) {
+				btn.disabled = true;
+				btn.setAttribute('aria-disabled', 'true');
+			}
+			btn.innerHTML =
+				'<span class="pm__action-label"></span>' + '<kbd class="pm__action-key"></kbd>';
+			btn.querySelector('.pm__action-label').textContent = a.label;
+			btn.querySelector('.pm__action-key').textContent = a.key;
+			if (a.run) {
+				btn.addEventListener('click', (ev) => {
+					ev.preventDefault();
+					a.run();
+				});
+			}
+			el.appendChild(btn);
+		});
+	}
+
+	/**
+	 * Advanced tab R/D keybinding helper. Locates the first REPLACE or
+	 * DOWNLOAD button inside the current asset pane and clicks it.
+	 * Silently no-ops if nothing is visible (e.g. summary view).
+	 */
+	_triggerFirstAssetBtn(kind) {
+		const pane = this.ui && this.ui.paneEl;
+		if (!pane) return;
+		const btns = pane.querySelectorAll('.pm__asset-btn');
+		const want = kind === 'replace' ? 'REPLACE' : 'DOWNLOAD';
+		for (const b of btns) {
+			if ((b.textContent || '').trim().toUpperCase().startsWith(want)) {
+				b.click();
+				return;
+			}
+		}
 	}
 
 	_renderEditor(row) {
@@ -2414,6 +2732,8 @@ export class Viewer {
 			b.setAttribute('aria-label', `Run ${rowLabel}`);
 			b.addEventListener('click', () => row.run && row.run());
 			editorEl.appendChild(b);
+		} else if (row.type === 'camera-preset') {
+			this._renderMapPreview(editorEl, row);
 		} else if (row.type === 'map') {
 			this._renderMapPane(editorEl, row);
 		} else if (row.type === 'brief') {
@@ -2430,6 +2750,255 @@ export class Viewer {
 		}
 
 		addDesc();
+	}
+
+	/**
+	 * Right-pane renderer for camera-preset rows in the Map tab.
+	 * Shows: big preset icon, an iso-style diagram of the camera position
+	 * relative to the model's bounding box, the box dimensions, the
+	 * computed distance from model center to camera, and an APPLY VIEW
+	 * button. Rows are soft-applied on selection (see `_selectRow`); this
+	 * button is kept for keyboard users / explicit re-trigger.
+	 */
+	_renderMapPreview(editorEl, row) {
+		const wrap = document.createElement('div');
+		wrap.className = 'pm__map-preview';
+		wrap.dataset.preset = row.preset || row.key;
+
+		// 1) Big preset icon (80x80).
+		if (row.icon) {
+			const preview = document.createElement('div');
+			preview.className = 'pm__icon-preview pm__icon-preview--lg';
+			preview.innerHTML = this._iconFor(row.icon, 80);
+			preview.setAttribute('aria-hidden', 'true');
+			wrap.appendChild(preview);
+		}
+
+		// 2) Iso-style diagram of the camera relative to the bounding box.
+		const diagram = this._buildPresetDiagram(row.preset || row.key);
+		wrap.appendChild(diagram);
+
+		// 3) Bounding-box dimensions (Width / Height / Depth), same stats
+		// shown on the Schematic view.
+		let box = null;
+		const size = new Vector3();
+		const center = new Vector3();
+		if (this.content) {
+			box = new Box3().setFromObject(this.content);
+			box.getSize(size);
+			box.getCenter(center);
+		}
+		const geom = { hasModel: !!box, box, size, center };
+
+		const dims = document.createElement('div');
+		dims.className = 'pm__map-dims';
+		const f = (n) => this._fmtMap(n);
+		[
+			['Width', geom.hasModel ? f(size.x) : '—', 'x'],
+			['Height', geom.hasModel ? f(size.y) : '—', 'y'],
+			['Depth', geom.hasModel ? f(size.z) : '—', 'z'],
+		].forEach(([label, value, axis]) => {
+			const cell = document.createElement('div');
+			cell.className = 'pm__map-dim';
+			cell.dataset.axis = axis;
+			cell.innerHTML =
+				'<span class="pm__map-dim-label"></span>' +
+				'<span class="pm__map-dim-value"></span>';
+			cell.querySelector('.pm__map-dim-label').textContent = label.toUpperCase();
+			cell.querySelector('.pm__map-dim-value').textContent = value;
+			dims.appendChild(cell);
+		});
+		wrap.appendChild(dims);
+
+		// 4) Distance from model center to the camera after the preset
+		// is applied. Mirrors the math in `_cameraPreset`.
+		const distance = geom.hasModel ? Math.max(size.x, size.y, size.z) * 1.8 || 1 : null;
+		const dist = document.createElement('p');
+		dist.className = 'pm__map-distance';
+		dist.textContent = geom.hasModel
+			? `Camera will move to ${f(distance)} units from model center.`
+			: 'Load a model to preview this view.';
+		wrap.appendChild(dist);
+
+		// 5) Big APPLY VIEW button with [ENTER] hint.
+		const applyBtn = document.createElement('button');
+		applyBtn.type = 'button';
+		applyBtn.className = 'pm__action-btn pm__map-apply';
+		applyBtn.setAttribute('aria-label', `Apply ${String(row.label).toUpperCase()} camera view`);
+		applyBtn.innerHTML =
+			'<span class="pm__map-apply-label">APPLY VIEW</span>' +
+			'<span class="pm__kbd">[ENTER]</span>';
+		applyBtn.disabled = !geom.hasModel;
+		applyBtn.addEventListener('click', () => row.run && row.run());
+		wrap.appendChild(applyBtn);
+
+		editorEl.appendChild(wrap);
+	}
+
+	/**
+	 * Builds an inline SVG that shows the model bounding box as a shaded
+	 * iso cube + a small camera glyph positioned according to the preset,
+	 * with dashed sight-lines pointing to the box center.
+	 */
+	_buildPresetDiagram(preset) {
+		const svgNS = 'http://www.w3.org/2000/svg';
+		const svg = document.createElementNS(svgNS, 'svg');
+		svg.setAttribute('class', 'pm__map-diagram');
+		svg.setAttribute('viewBox', '0 0 240 160');
+		svg.setAttribute('role', 'img');
+		svg.setAttribute('aria-label', `Camera placement diagram for ${preset} view`);
+
+		// Iso cube (projected), centered around (120, 82).
+		// Axis vectors in screen space (unit = 32px along each world axis).
+		const CX = 120;
+		const CY = 82;
+		const U = 32; // world unit in screen px
+		// World axes → screen offsets (classic iso-ish projection).
+		const ax = (wx, wy, wz) => ({
+			x: CX + wx * U * 0.92 - wz * U * 0.92,
+			y: CY - wy * U * 0.8 + wx * U * 0.45 + wz * U * 0.45,
+		});
+
+		// Bounding box world-space half extents (unit cube: ±1).
+		const H = 1;
+		const corners = {
+			// lowercase letters by sign convention
+			A: ax(-H, -H, -H),
+			B: ax(H, -H, -H),
+			C: ax(H, -H, H),
+			D: ax(-H, -H, H),
+			E: ax(-H, H, -H),
+			F: ax(H, H, -H),
+			G: ax(H, H, H),
+			P: ax(-H, H, H),
+		};
+		const pt = (c) => `${c.x.toFixed(1)},${c.y.toFixed(1)}`;
+
+		// Shaded faces: top (E F G P), right (B C G F), front (D C G P).
+		const face = (pts, cls) => {
+			const f = document.createElementNS(svgNS, 'polygon');
+			f.setAttribute('points', pts.map(pt).join(' '));
+			f.setAttribute('class', cls);
+			svg.appendChild(f);
+		};
+		face(
+			[corners.D, corners.C, corners.G, corners.P],
+			'pm__map-diagram-face pm__map-diagram-face--front',
+		);
+		face(
+			[corners.B, corners.C, corners.G, corners.F],
+			'pm__map-diagram-face pm__map-diagram-face--right',
+		);
+		face(
+			[corners.E, corners.F, corners.G, corners.P],
+			'pm__map-diagram-face pm__map-diagram-face--top',
+		);
+
+		// Back edges (dashed).
+		const edge = (a, b, cls) => {
+			const l = document.createElementNS(svgNS, 'line');
+			l.setAttribute('x1', a.x);
+			l.setAttribute('y1', a.y);
+			l.setAttribute('x2', b.x);
+			l.setAttribute('y2', b.y);
+			l.setAttribute('class', cls);
+			svg.appendChild(l);
+		};
+		edge(corners.A, corners.B, 'pm__map-diagram-edge pm__map-diagram-edge--hidden');
+		edge(corners.A, corners.D, 'pm__map-diagram-edge pm__map-diagram-edge--hidden');
+		edge(corners.A, corners.E, 'pm__map-diagram-edge pm__map-diagram-edge--hidden');
+
+		// Box center (screen).
+		const centerPt = ax(0, 0, 0);
+
+		// Camera world-space position per preset (distance ~2.2 from center).
+		const D = 2.4;
+		const camWorld = (() => {
+			switch (preset) {
+				case 'top':
+					return [0, D, 0];
+				case 'front':
+					return [0, 0, D];
+				case 'back':
+					return [0, 0, -D];
+				case 'side':
+					return [D, 0, 0];
+				case 'iso':
+					return [D * 0.7, D * 0.7, D * 0.7];
+				case 'reset':
+				default:
+					return [D * 0.55, D * 0.35, D * 0.55];
+			}
+		})();
+		const camPt = ax(camWorld[0], camWorld[1], camWorld[2]);
+
+		// Dashed sight-line from camera to box center.
+		const sight = document.createElementNS(svgNS, 'line');
+		sight.setAttribute('x1', camPt.x);
+		sight.setAttribute('y1', camPt.y);
+		sight.setAttribute('x2', centerPt.x);
+		sight.setAttribute('y2', centerPt.y);
+		sight.setAttribute('class', 'pm__map-diagram-sight');
+		svg.appendChild(sight);
+
+		// Center dot (model origin marker).
+		const centerDot = document.createElementNS(svgNS, 'circle');
+		centerDot.setAttribute('cx', centerPt.x);
+		centerDot.setAttribute('cy', centerPt.y);
+		centerDot.setAttribute('r', 2.4);
+		centerDot.setAttribute('class', 'pm__map-diagram-center');
+		svg.appendChild(centerDot);
+
+		// Camera glyph: small filled square + lens cone pointing at the center.
+		const camG = document.createElementNS(svgNS, 'g');
+		camG.setAttribute('class', 'pm__map-diagram-cam');
+		const angle = Math.atan2(centerPt.y - camPt.y, centerPt.x - camPt.x);
+		camG.setAttribute(
+			'transform',
+			`translate(${camPt.x.toFixed(1)}, ${camPt.y.toFixed(1)}) rotate(${(
+				(angle * 180) /
+				Math.PI
+			).toFixed(1)})`,
+		);
+		const body = document.createElementNS(svgNS, 'rect');
+		body.setAttribute('x', -8);
+		body.setAttribute('y', -6);
+		body.setAttribute('width', 12);
+		body.setAttribute('height', 12);
+		body.setAttribute('class', 'pm__map-diagram-cam-body');
+		camG.appendChild(body);
+		const lens = document.createElementNS(svgNS, 'polygon');
+		lens.setAttribute('points', '4,-5 12,-8 12,8 4,5');
+		lens.setAttribute('class', 'pm__map-diagram-cam-lens');
+		camG.appendChild(lens);
+		svg.appendChild(camG);
+
+		// Axis legend in the lower-left corner so the viewer can orient
+		// themselves (X red / Y green / Z amber — matches the rest of Map).
+		const legendG = document.createElementNS(svgNS, 'g');
+		legendG.setAttribute('class', 'pm__map-diagram-legend');
+		legendG.setAttribute('transform', 'translate(18, 142)');
+		const axisLine = (dx, dy, cls, label, lx, ly) => {
+			const l = document.createElementNS(svgNS, 'line');
+			l.setAttribute('x1', 0);
+			l.setAttribute('y1', 0);
+			l.setAttribute('x2', dx);
+			l.setAttribute('y2', dy);
+			l.setAttribute('class', cls);
+			legendG.appendChild(l);
+			const t = document.createElementNS(svgNS, 'text');
+			t.setAttribute('x', lx);
+			t.setAttribute('y', ly);
+			t.setAttribute('class', cls + ' pm__map-diagram-legend-label');
+			t.textContent = label;
+			legendG.appendChild(t);
+		};
+		axisLine(14, 7, 'pm__map-diagram-axis pm__map-diagram-axis--x', '+X', 18, 12);
+		axisLine(0, -14, 'pm__map-diagram-axis pm__map-diagram-axis--y', '+Y', 4, -16);
+		axisLine(-14, 7, 'pm__map-diagram-axis pm__map-diagram-axis--z', '+Z', -26, 12);
+		svg.appendChild(legendG);
+
+		return svg;
 	}
 
 	_renderMapPane(editorEl, row) {
@@ -2654,7 +3223,10 @@ export class Viewer {
 				if (camMarker) {
 					const px = clamp(worldToSvgX(tmp.x), PAD, PAD + INNER);
 					const py = clamp(worldToSvgY(tmp.z), PAD, PAD + INNER);
-					camMarker.setAttribute('transform', `translate(${px}, ${py}) rotate(${headingDeg})`);
+					camMarker.setAttribute(
+						'transform',
+						`translate(${px}, ${py}) rotate(${headingDeg})`,
+					);
 				}
 				if (onTick) onTick({ headingDeg, dir: tmpDir, pos: tmp });
 				viewer._mapTickerId = requestAnimationFrame(tick);
@@ -2745,8 +3317,7 @@ export class Viewer {
 			const vol = size.x * size.y * size.z;
 			const dims = [size.x, size.y, size.z];
 			const longest = ['X', 'Y', 'Z'][dims.indexOf(maxDim)];
-			const aspect =
-				dims.map((d) => (d / maxDim).toFixed(2)).join(' : ');
+			const aspect = dims.map((d) => (d / maxDim).toFixed(2)).join(' : ');
 			const summary = document.createElement('div');
 			summary.className = 'pm__map-summary';
 			summary.innerHTML =
@@ -2967,7 +3538,11 @@ export class Viewer {
 						depth: this._depthOf(node, scene),
 					});
 				}
-				if (node.geometry && node.geometry.attributes && node.geometry.attributes.position) {
+				if (
+					node.geometry &&
+					node.geometry.attributes &&
+					node.geometry.attributes.position
+				) {
 					const posCount = node.geometry.attributes.position.count || 0;
 					vertices += posCount;
 					if (node.geometry.index) {
@@ -3150,7 +3725,8 @@ export class Viewer {
 				<span class="pm__brief-section-count"></span>
 			</div>
 		`;
-		nodesSec.querySelector('.pm__brief-section-count').textContent = `${data.nodes.length} / ${data.nodeTotal}`;
+		nodesSec.querySelector('.pm__brief-section-count').textContent =
+			`${data.nodes.length} / ${data.nodeTotal}`;
 		const tree = document.createElement('ul');
 		tree.className = 'pm__brief-tree';
 		data.nodes.forEach((n) => {
@@ -3185,7 +3761,9 @@ export class Viewer {
 				<span class="pm__brief-section-count"></span>
 			</div>
 		`;
-		matsSec.querySelector('.pm__brief-section-count').textContent = String(data.materials.length);
+		matsSec.querySelector('.pm__brief-section-count').textContent = String(
+			data.materials.length,
+		);
 		const swatches = document.createElement('div');
 		swatches.className = 'pm__brief-swatches';
 		data.materials.forEach((m) => {
@@ -3342,7 +3920,8 @@ export class Viewer {
 					verts += (json.accessors[posIdx] && json.accessors[posIdx].count) || 0;
 				}
 				if (typeof p.indices === 'number' && Array.isArray(json.accessors)) {
-					const idxCount = (json.accessors[p.indices] && json.accessors[p.indices].count) || 0;
+					const idxCount =
+						(json.accessors[p.indices] && json.accessors[p.indices].count) || 0;
 					tris += Math.floor(idxCount / 3);
 				}
 			});
@@ -3497,10 +4076,7 @@ export class Viewer {
 	_renderAssetSummary(shell, data) {
 		const imgBytes = data.images.reduce((s, i) => s + (i.bytes || 0), 0);
 		const bufBytes = data.buffers.reduce((s, b) => s + (b.bytes || 0), 0);
-		const gpuBytes = data.images.reduce(
-			(s, i) => s + this._estGpuBytes(i.width, i.height),
-			0,
-		);
+		const gpuBytes = data.images.reduce((s, i) => s + this._estGpuBytes(i.width, i.height), 0);
 		let saved = 0;
 		let baseline = 0;
 		data.images.forEach((img) => {
@@ -3814,7 +4390,10 @@ export class Viewer {
 				}
 				const ab = await parser.getDependency('buffer', item.index);
 				const filename = this._stripExt(item.name) + '.bin';
-				this._triggerDownload(new Blob([ab], { type: 'application/octet-stream' }), filename);
+				this._triggerDownload(
+					new Blob([ab], { type: 'application/octet-stream' }),
+					filename,
+				);
 			}
 			if (window.VIEWER && window.VIEWER.toast) {
 				window.VIEWER.toast(`DOWNLOADED \u00B7 ${String(item.name).toUpperCase()}`, {
@@ -3870,9 +4449,7 @@ export class Viewer {
 	async _handleReplaceFile(item, file) {
 		try {
 			const buf = await file.arrayBuffer();
-			const blobUrl = URL.createObjectURL(
-				new Blob([buf], { type: file.type || item.mime }),
-			);
+			const blobUrl = URL.createObjectURL(new Blob([buf], { type: file.type || item.mime }));
 
 			const oldTex = item.texture || this._findTextureForImageIndex(item.index);
 			const newTex = new Texture();
@@ -3976,9 +4553,7 @@ export class Viewer {
 			canvas.height = h;
 			const ctx = canvas.getContext('2d');
 			ctx.drawImage(imgEl, 0, 0, w, h);
-			const blob = await new Promise((res) =>
-				canvas.toBlob(res, 'image/jpeg', 0.85),
-			);
+			const blob = await new Promise((res) => canvas.toBlob(res, 'image/jpeg', 0.85));
 			if (!blob) {
 				if (window.VIEWER && window.VIEWER.toast) {
 					window.VIEWER.toast('OPTIMIZE FAILED', { level: 'error' });
@@ -4027,6 +4602,12 @@ export class Viewer {
 		if (toggle) {
 			toggle.addEventListener('click', () => this._setMenuOpen(true));
 		}
+		// Mobile close (X) button — ESC-equivalent for touch devices.
+		const closeBtn = document.getElementById('pm-close');
+		if (closeBtn && !closeBtn._wired) {
+			closeBtn._wired = true;
+			closeBtn.addEventListener('click', () => this._setMenuOpen(false));
+		}
 		const share = document.getElementById('pm-share');
 		if (share && !share._wired) {
 			share._wired = true;
@@ -4035,6 +4616,104 @@ export class Viewer {
 		if (!this._keyHandler) {
 			this._keyHandler = (e) => this._onKey(e);
 			window.addEventListener('keydown', this._keyHandler);
+		}
+		this._wireTouchGestures();
+	}
+
+	/**
+	 * Mobile-only touch gestures on the pause menu:
+	 *   - Swipe-right > 80px on the `.pm` overlay closes the menu
+	 *     (ESC equivalent; mobile has no hardware escape key).
+	 *   - Horizontal swipe on the tab bar switches tabs (Tab/Shift+Tab
+	 *     equivalent; mobile has no keyboard).
+	 */
+	_wireTouchGestures() {
+		if (this._touchGesturesWired) return;
+		this._touchGesturesWired = true;
+
+		const pmEl = document.querySelector('.pm');
+		const tabsEl = this.ui && this.ui.tabsEl;
+
+		// ---------- Swipe-right-to-close on the overlay ----------
+		if (pmEl) {
+			let sx = 0,
+				sy = 0,
+				tracking = false;
+			pmEl.addEventListener(
+				'touchstart',
+				(e) => {
+					if (!e.touches || e.touches.length !== 1) {
+						tracking = false;
+						return;
+					}
+					// Don't hijack swipes that begin inside a horizontally scrollable
+					// region (e.g., the tab bar — it has its own gesture handler).
+					if (tabsEl && tabsEl.contains(e.target)) {
+						tracking = false;
+						return;
+					}
+					sx = e.touches[0].clientX;
+					sy = e.touches[0].clientY;
+					tracking = true;
+				},
+				{ passive: true },
+			);
+			pmEl.addEventListener(
+				'touchend',
+				(e) => {
+					if (!tracking) return;
+					tracking = false;
+					const t = (e.changedTouches && e.changedTouches[0]) || null;
+					if (!t) return;
+					const dx = t.clientX - sx;
+					const dy = t.clientY - sy;
+					// Must be a dominant rightward gesture ( > 80px, |dy| < |dx|/2 ).
+					if (dx > 80 && Math.abs(dy) < Math.abs(dx) * 0.6) {
+						this._setMenuOpen(false);
+					}
+				},
+				{ passive: true },
+			);
+		}
+
+		// ---------- Horizontal swipe on the tab bar -> prev/next tab ----------
+		if (tabsEl) {
+			let sx = 0,
+				sy = 0,
+				tracking = false;
+			tabsEl.addEventListener(
+				'touchstart',
+				(e) => {
+					if (!e.touches || e.touches.length !== 1) {
+						tracking = false;
+						return;
+					}
+					sx = e.touches[0].clientX;
+					sy = e.touches[0].clientY;
+					tracking = true;
+				},
+				{ passive: true },
+			);
+			tabsEl.addEventListener(
+				'touchend',
+				(e) => {
+					if (!tracking) return;
+					tracking = false;
+					const t = (e.changedTouches && e.changedTouches[0]) || null;
+					if (!t) return;
+					const dx = t.clientX - sx;
+					const dy = t.clientY - sy;
+					// Threshold smaller than overlay-close so it reads naturally.
+					if (Math.abs(dx) < 48 || Math.abs(dy) > Math.abs(dx) * 0.6) return;
+					const tabs = Object.keys(this.schema || {});
+					if (!tabs.length) return;
+					const i = tabs.indexOf(this.ui.activeTab);
+					// Swipe LEFT (dx < 0) -> next tab; swipe RIGHT -> previous.
+					const n = dx < 0 ? (i + 1) % tabs.length : (i - 1 + tabs.length) % tabs.length;
+					this._selectTab(tabs[n]);
+				},
+				{ passive: true },
+			);
 		}
 	}
 
@@ -4120,6 +4799,23 @@ export class Viewer {
 		document.body.dataset.menuOpen = open ? 'true' : 'false';
 		const toggle = document.getElementById('pm-toggle');
 		if (toggle) toggle.hidden = !!open;
+		// On narrow/mobile widths the menu takes the full viewport, so
+		// OrbitControls touch events would fight the menu scroll/swipe
+		// handlers. Disable controls whenever the menu is open AND the
+		// viewport is fullscreen-mode (<900px). On wide split-view layouts
+		// the canvas is still visible on the right, so we keep controls on.
+		if (this.controls) {
+			const fullscreenMenu = open && window.matchMedia('(max-width: 899px)').matches;
+			// Respect the camera-driven disable: if an embedded glTF camera
+			// is active we never want to force controls back on.
+			const cameraDrivenOff =
+				this.state && this.state.camera && this.state.camera !== DEFAULT_CAMERA;
+			if (fullscreenMenu) {
+				this.controls.enabled = false;
+			} else if (!cameraDrivenOff) {
+				this.controls.enabled = true;
+			}
+		}
 		// Split-view: opening/closing the pause menu changes the visible
 		// viewport size (menu occupies the left 60% on wide screens), so
 		// the three.js renderer needs to re-measure its container. One
@@ -4127,10 +4823,14 @@ export class Viewer {
 		// clientWidth/clientHeight in resize().
 		if (typeof requestAnimationFrame === 'function') {
 			requestAnimationFrame(() => {
-				try { this.resize(); } catch (e) {}
+				try {
+					this.resize();
+				} catch (e) {}
 			});
 		} else {
-			try { this.resize(); } catch (e) {}
+			try {
+				this.resize();
+			} catch (e) {}
 		}
 	}
 
@@ -4201,7 +4901,7 @@ export class Viewer {
 		} else if (e.key === 'Enter' || e.key === ' ') {
 			const row = rows[this.ui.activeRow];
 			if (!row) return;
-			if (row.type === 'action') {
+			if (row.type === 'action' || row.type === 'camera-preset') {
 				e.preventDefault();
 				row.run && row.run();
 			} else if (row.type === 'bool') {
@@ -4209,7 +4909,27 @@ export class Viewer {
 				row.set(!row.get());
 				this._renderRail();
 				this._renderPane();
+			} else if (row.type === 'color') {
+				// PICK: open the native color input for the selected row.
+				e.preventDefault();
+				const input = this.ui.paneEl
+					? this.ui.paneEl.querySelector('.pm__color-input')
+					: null;
+				if (input) {
+					input.focus();
+					if (typeof input.click === 'function') input.click();
+				}
 			}
+		} else if (
+			this.ui.activeTab === 'advanced' &&
+			(e.key === 'r' || e.key === 'R' || e.key === 'd' || e.key === 'D')
+		) {
+			// Advanced tab R/D shortcuts — REPLACE / DOWNLOAD the first
+			// visible asset in the current pane. Mirrors the footer action bar.
+			const row = rows[this.ui.activeRow];
+			if (!row || row.type !== 'asset') return;
+			e.preventDefault();
+			this._triggerFirstAssetBtn(e.key === 'r' || e.key === 'R' ? 'replace' : 'download');
 		}
 	}
 
