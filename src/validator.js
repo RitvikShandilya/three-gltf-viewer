@@ -94,6 +94,42 @@ export class Validator {
 		this.setResponse(response);
 
 		this.toggleEl.innerHTML = ValidatorToggle(report);
+
+		// Surface a "FIX ISSUES" shortcut whenever the validator flagged
+		// anything worth a user's attention (errors or warnings). The button
+		// routes through window.VIEWER.fixGLTF, which Viewer exposes after
+		// load() — so the button only appears once a model is actually in
+		// memory, and a single click runs the same cleanup as the Brief tab.
+		const hasActionableIssues =
+			report.issues &&
+			((report.issues.numErrors || 0) + (report.issues.numWarnings || 0)) > 0;
+		if (hasActionableIssues) {
+			const fixBtn = document.createElement('button');
+			fixBtn.type = 'button';
+			fixBtn.className = 'report-toggle-fix';
+			fixBtn.textContent = 'FIX ISSUES';
+			fixBtn.setAttribute('aria-label', 'Auto-fix glTF geometry and textures');
+			fixBtn.addEventListener('click', (e) => {
+				// Don't let the click bubble up to the toggle itself, which
+				// would otherwise open the full validation report.
+				e.stopPropagation();
+				if (window.VIEWER && typeof window.VIEWER.fixGLTF === 'function') {
+					window.VIEWER.fixGLTF();
+				} else if (window.VIEWER && typeof window.VIEWER.toast === 'function') {
+					window.VIEWER.toast('Fix unavailable: no model loaded.', { level: 'error' });
+				}
+			});
+			// Place the button before the close "x" so it reads
+			// [severity bar] [message] [FIX ISSUES] [×]
+			const toggleInner = this.toggleEl.querySelector('.report-toggle');
+			const closeBtn = this.toggleEl.querySelector('.report-toggle-close');
+			if (toggleInner && closeBtn) {
+				toggleInner.insertBefore(fixBtn, closeBtn);
+			} else if (toggleInner) {
+				toggleInner.appendChild(fixBtn);
+			}
+		}
+
 		this.showToggle();
 		this.bindListeners();
 

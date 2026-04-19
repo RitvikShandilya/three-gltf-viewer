@@ -10,16 +10,23 @@ import {
 	HemisphereLight,
 	LoaderUtils,
 	LoadingManager,
+	Mesh,
+	MeshBasicMaterial,
+	PCFSoftShadowMap,
 	PMREMGenerator,
 	PerspectiveCamera,
+	PlaneGeometry,
 	PointsMaterial,
 	REVISION,
+	RingGeometry,
 	Scene,
 	SkeletonHelper,
+	SRGBColorSpace,
 	Vector3,
 	WebGLRenderer,
 	LinearToneMapping,
 	ACESFilmicToneMapping,
+	DoubleSide,
 } from 'three';
 import Stats from 'three/addons/libs/stats.module.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
@@ -71,17 +78,20 @@ export class Viewer {
 			wireframe: false,
 			skeleton: false,
 			grid: false,
+			ground: true,
 			autoRotate: false,
+			followCamera: false,
+			freePan: false,
 
 			// Lights
 			punctualLights: true,
 			exposure: 0.0,
-			toneMapping: LinearToneMapping,
+			toneMapping: ACESFilmicToneMapping,
 			ambientIntensity: 0.3,
 			ambientColor: '#FFFFFF',
 			directIntensity: 0.8 * Math.PI, // TODO(#116)
 			directColor: '#FFFFFF',
-			bgColor: '#191919',
+			bgColor: '#0a0a0a',
 
 			pointSize: 1.0,
 		};
@@ -107,9 +117,11 @@ export class Viewer {
 		this.scene.add(this.defaultCamera);
 
 		this.renderer = window.renderer = new WebGLRenderer({ antialias: true });
-		this.renderer.setClearColor(0xcccccc);
+		this.renderer.outputColorSpace = SRGBColorSpace;
 		this.renderer.setPixelRatio(window.devicePixelRatio);
 		this.renderer.setSize(el.clientWidth, el.clientHeight);
+		this.renderer.shadowMap.enabled = true;
+		this.renderer.shadowMap.type = PCFSoftShadowMap;
 
 		this.pmremGenerator = new PMREMGenerator(this.renderer);
 		this.pmremGenerator.compileEquirectangularShader();
@@ -124,6 +136,8 @@ export class Viewer {
 		this.skeletonHelpers = [];
 		this.gridHelper = null;
 		this.axesHelper = null;
+		this.groundPlane = null;
+		this.groundRing = null;
 
 		this.addAxesHelper();
 
@@ -143,9 +157,24 @@ export class Viewer {
 
 		const dt = (time - this.prevTime) / 1000;
 
+		this.mixer && this.mixer.update(dt);
+
+		// FOLLOW CAMERA: track animated content root each frame so the
+		// OrbitControls target chases it (e.g., walking characters).
+		if (
+			this.state.followCamera &&
+			this.content &&
+			this.mixer &&
+			this.clips &&
+			this.clips.length
+		) {
+			if (!this._followTargetVec) this._followTargetVec = new Vector3();
+			this.content.getWorldPosition(this._followTargetVec);
+			this.controls.target.copy(this._followTargetVec);
+		}
+
 		this.controls.update();
 		this.stats.update();
-		this.mixer && this.mixer.update(dt);
 		this.render();
 
 		this.prevTime = time;
@@ -253,7 +282,8 @@ export class Viewer {
 		object.updateMatrixWorld(); // donmccurdy/three-gltf-viewer#330
 
 		const box = new Box3().setFromObject(object);
-		const size = box.getSize(new Vector3()).length();
+		const sizeVec = box.getSize(new Vector3());
+		const size = sizeVec.length();
 		const center = box.getCenter(new Vector3());
 
 		this.controls.reset();
@@ -262,7 +292,16 @@ export class Viewer {
 		object.position.y -= center.y;
 		object.position.z -= center.z;
 
+		// Sit the model on the ground plane (min.y == 0) instead of hovering half-below.
+		object.position.y += sizeVec.y / 2;
+
+		// Remember extents so the ground plane can be sized.
+		this._modelSize = sizeVec.clone();
+
 		this.controls.maxDistance = size * 10;
+		this._defaultMaxDistance = size * 10;
+		// Reapply free-pan overrides (if enabled) now that base defaults are set.
+		this._applyFreePan();
 
 		this.defaultCamera.near = size / 100;
 		this.defaultCamera.far = size * 100;
@@ -295,9 +334,27 @@ export class Viewer {
 
 		this.state.punctualLights = true;
 
+		const maxAnisotropy = this.renderer.capabilities.getMaxAnisotropy();
+
 		this.content.traverse((node) => {
 			if (node.isLight) {
 				this.state.punctualLights = false;
+			}
+			if (node.isMesh) {
+				node.castShadow = true;
+				node.receiveShadow = true;
+
+				// Crisp-up textures at oblique angles.
+				const materials = Array.isArray(node.material) ? node.material : [node.material];
+				for (const material of materials) {
+					if (!material) continue;
+					for (const key in material) {
+						const value = material[key];
+						if (value && value.isTexture) {
+							value.anisotropy = maxAnisotropy;
+						}
+					}
+				}
 			}
 		});
 
@@ -307,8 +364,12 @@ export class Viewer {
 		this.updateGUI();
 		this.updateEnvironment();
 		this.updateDisplay();
+		this._updateGround();
 
 		window.VIEWER.scene = this.content;
+		// Surface the fix routine so external UI (e.g. the validation report
+		// toggle) can trigger the same cleanup used by the BRIEF tab button.
+		window.VIEWER.fixGLTF = () => this._fixGLTF();
 	}
 
 	/**
@@ -388,8 +449,24 @@ export class Viewer {
 		this.defaultCamera.add(light1);
 
 		const light2 = new DirectionalLight(state.directColor, state.directIntensity);
-		light2.position.set(0.5, 0, 0.866); // ~60º
+		// Angled position for a subtle rim-lit highlight on loaded content.
+		light2.position.set(1, 1.5, 1).normalize();
 		light2.name = 'main_light';
+		light2.castShadow = true;
+		light2.shadow.mapSize.set(2048, 2048);
+		light2.shadow.bias = -0.0005;
+		light2.shadow.normalBias = 0.02;
+		const shadowCam = light2.shadow.camera;
+		const shadowExtent = this._modelSize
+			? Math.max(this._modelSize.x, this._modelSize.y, this._modelSize.z) * 2
+			: 10;
+		shadowCam.left = -shadowExtent;
+		shadowCam.right = shadowExtent;
+		shadowCam.top = shadowExtent;
+		shadowCam.bottom = -shadowExtent;
+		shadowCam.near = 0.01;
+		shadowCam.far = shadowExtent * 10;
+		shadowCam.updateProjectionMatrix();
 		this.defaultCamera.add(light2);
 
 		this.lights.push(light1, light2);
@@ -439,6 +516,59 @@ export class Viewer {
 		});
 	}
 
+	_updateGround() {
+		// Tear down any existing ground artifacts first.
+		if (this.groundPlane) {
+			this.scene.remove(this.groundPlane);
+			this.groundPlane.geometry.dispose();
+			this.groundPlane.material.dispose();
+			this.groundPlane = null;
+		}
+		if (this.groundRing) {
+			this.scene.remove(this.groundRing);
+			this.groundRing.geometry.dispose();
+			this.groundRing.material.dispose();
+			this.groundRing = null;
+		}
+
+		if (!this.state.ground) return;
+
+		const size = this._modelSize || new Vector3(1, 1, 1);
+		const extent = Math.max(size.x, size.z, 0.1) * 4;
+
+		// Main ground plane -- subtle dark square beneath the model.
+		const planeGeo = new PlaneGeometry(extent, extent);
+		const planeMat = new MeshBasicMaterial({
+			color: 0x0a0a0a,
+			transparent: true,
+			opacity: 0.6,
+			depthWrite: false,
+			side: DoubleSide,
+		});
+		this.groundPlane = new Mesh(planeGeo, planeMat);
+		this.groundPlane.rotation.x = -Math.PI / 2;
+		this.groundPlane.position.y = 0;
+		this.groundPlane.receiveShadow = true;
+		this.groundPlane.renderOrder = -1;
+		this.scene.add(this.groundPlane);
+
+		// Concentric thin "shadow hint" ring just above the plane for depth cues.
+		const ringInner = Math.max(size.x, size.z) * 0.55;
+		const ringOuter = ringInner * 1.04;
+		const ringGeo = new RingGeometry(ringInner, ringOuter, 96);
+		const ringMat = new MeshBasicMaterial({
+			color: 0x000000,
+			transparent: true,
+			opacity: 0.25,
+			depthWrite: false,
+			side: DoubleSide,
+		});
+		this.groundRing = new Mesh(ringGeo, ringMat);
+		this.groundRing.rotation.x = -Math.PI / 2;
+		this.groundRing.position.y = 0.001;
+		this.scene.add(this.groundRing);
+	}
+
 	updateDisplay() {
 		if (this.skeletonHelpers.length) {
 			this.skeletonHelpers.forEach((helper) => this.scene.remove(helper));
@@ -481,8 +611,198 @@ export class Viewer {
 		this.controls.autoRotate = this.state.autoRotate;
 	}
 
+	/**
+	 * Runs common cleanups on the loaded glTF scene in-memory.
+	 *
+	 * Operates on the already-parsed three.js objects (not the raw glTF JSON),
+	 * so no reload is required — changes take effect on the next frame.
+	 *
+	 * Fixes applied (when needed):
+	 *   1. Recompute vertex normals for geometries missing or degenerate normals.
+	 *   2. Replace NaN/Infinity vertex positions with 0.
+	 *   3. Normalize each normal vec3 to unit length.
+	 *   4. Sit the model on the floor (min.y of world AABB == 0).
+	 *   5. Center the model on the XZ origin, preserving min.y == 0.
+	 *   6. Recompute each geometry's bounding box and bounding sphere.
+	 *   7. Ensure textures have flipY === false (the glTF spec default) and
+	 *      force a re-upload with needsUpdate.
+	 *
+	 * @returns {void}
+	 */
+	_fixGLTF() {
+		if (!this.content) {
+			if (window.VIEWER && typeof window.VIEWER.toast === 'function') {
+				window.VIEWER.toast('No model loaded.', { level: 'error' });
+			}
+			return;
+		}
+
+		const stats = {
+			normalsRecomputed: 0,
+			nansFound: 0,
+			normalsNormalized: 0,
+			repositioned: 0,
+			boundsComputed: 0,
+			texturesFixed: 0,
+		};
+
+		const seenGeometries = new Set();
+		const seenTextures = new Set();
+
+		// Helper: detect whether a normal attribute is "suspect" (zero-length
+		// or wildly non-unit vectors). Spot-samples to stay O(n) on huge models.
+		const hasSuspectNormals = (normalAttr) => {
+			const count = normalAttr.count;
+			if (!count) return true;
+			const stride = Math.max(1, Math.floor(count / 64));
+			let bad = 0;
+			let checked = 0;
+			for (let i = 0; i < count; i += stride) {
+				const nx = normalAttr.getX(i);
+				const ny = normalAttr.getY(i);
+				const nz = normalAttr.getZ(i);
+				const len = Math.sqrt(nx * nx + ny * ny + nz * nz);
+				checked++;
+				if (!isFinite(len) || len < 0.5 || len > 1.5) bad++;
+			}
+			return checked > 0 && bad / checked > 0.1;
+		};
+
+		this.content.traverse((node) => {
+			const geom = node.geometry;
+			if (!geom || !geom.isBufferGeometry || seenGeometries.has(geom)) return;
+			seenGeometries.add(geom);
+
+			const position = geom.attributes && geom.attributes.position;
+			const normal = geom.attributes && geom.attributes.normal;
+
+			// 2. Remove NaN/Infinity vertices from position attribute.
+			if (position) {
+				const arr = position.array;
+				let localNans = 0;
+				for (let i = 0; i < arr.length; i++) {
+					if (!isFinite(arr[i])) {
+						arr[i] = 0;
+						localNans++;
+					}
+				}
+				if (localNans > 0) {
+					position.needsUpdate = true;
+					stats.nansFound += localNans;
+					console.warn(
+						`[FIX] Replaced ${localNans} non-finite position values on "${node.name || geom.uuid}"`,
+					);
+				}
+			}
+
+			// 1. Recompute normals if missing or clearly non-normalized.
+			if (!normal || hasSuspectNormals(normal)) {
+				if (position) {
+					geom.computeVertexNormals();
+					stats.normalsRecomputed++;
+				}
+			}
+
+			// 3. Normalize each normal vec3 (re-read after possible recompute).
+			const n2 = geom.attributes && geom.attributes.normal;
+			if (n2) {
+				let normalized = 0;
+				for (let i = 0; i < n2.count; i++) {
+					const x = n2.getX(i);
+					const y = n2.getY(i);
+					const z = n2.getZ(i);
+					const len = Math.sqrt(x * x + y * y + z * z);
+					if (len > 0 && Math.abs(len - 1) > 1e-4) {
+						const inv = 1 / len;
+						n2.setXYZ(i, x * inv, y * inv, z * inv);
+						normalized++;
+					}
+				}
+				if (normalized > 0) {
+					n2.needsUpdate = true;
+					stats.normalsNormalized += normalized;
+				}
+			}
+
+			// 6. Recompute bounds (fixes raycasting/frustum-culling issues).
+			geom.computeBoundingBox();
+			geom.computeBoundingSphere();
+			stats.boundsComputed++;
+		});
+
+		// 4 & 5. Sit-on-floor and center on origin XZ.
+		// Use world-space AABB so nested transforms are accounted for.
+		this.content.updateMatrixWorld(true);
+		const box = new Box3().setFromObject(this.content);
+		if (!box.isEmpty() && isFinite(box.min.x) && isFinite(box.max.x)) {
+			const center = new Vector3();
+			box.getCenter(center);
+			const dx = -center.x;
+			const dz = -center.z;
+			const dy = -box.min.y;
+			if (Math.abs(dx) > 1e-6 || Math.abs(dy) > 1e-6 || Math.abs(dz) > 1e-6) {
+				this.content.position.x += dx;
+				this.content.position.y += dy;
+				this.content.position.z += dz;
+				stats.repositioned = 1;
+			}
+		}
+
+		// 7. Normalize texture flipY per glTF spec (should be false).
+		traverseMaterials(this.content, (material) => {
+			for (const key in material) {
+				const value = material[key];
+				if (value && value.isTexture && !seenTextures.has(value)) {
+					seenTextures.add(value);
+					if (value.flipY !== false) {
+						value.flipY = false;
+						value.needsUpdate = true;
+						stats.texturesFixed++;
+					}
+				}
+			}
+		});
+
+		this.updateDisplay();
+
+		const parts = [];
+		if (stats.normalsRecomputed) parts.push(`${stats.normalsRecomputed} normals recomputed`);
+		if (stats.nansFound) parts.push(`${stats.nansFound} NaNs cleaned`);
+		if (stats.normalsNormalized) parts.push(`${stats.normalsNormalized} normals normalized`);
+		if (stats.repositioned) parts.push('repositioned');
+		if (stats.boundsComputed) parts.push(`${stats.boundsComputed} bounds rebuilt`);
+		if (stats.texturesFixed) parts.push(`${stats.texturesFixed} textures refreshed`);
+		const summary = parts.length ? parts.join(', ') : 'nothing to fix';
+
+		if (window.VIEWER && typeof window.VIEWER.toast === 'function') {
+			window.VIEWER.toast(`Fixed: ${summary}`, { level: 'success' });
+		}
+	}
+
 	updateBackground() {
 		this.backgroundColor.set(this.state.bgColor);
+	}
+
+	/**
+	 * Apply or revert FREE PAN overrides on OrbitControls. When on, panning is
+	 * sensitized, damping is enabled, and the zoom cap is removed so the user
+	 * can roam anywhere. When off, reset to the per-content defaults.
+	 */
+	_applyFreePan() {
+		if (!this.controls) return;
+		if (this.state.freePan) {
+			this.controls.panSpeed = 2.0;
+			this.controls.enableDamping = true;
+			this.controls.dampingFactor = 0.08;
+			this.controls.screenSpacePanning = true;
+			this.controls.maxDistance = Infinity;
+		} else {
+			this.controls.panSpeed = 1.0;
+			this.controls.enableDamping = false;
+			this.controls.dampingFactor = 0.05;
+			this.controls.maxDistance =
+				typeof this._defaultMaxDistance === 'number' ? this._defaultMaxDistance : Infinity;
+		}
 	}
 
 	/**
@@ -605,6 +925,13 @@ export class Viewer {
 						view: 'materials',
 						desc: 'Swatch grid of every material\u2019s base color.',
 					},
+					{
+						key: 'autoFix',
+						label: 'Auto-Fix Geometry',
+						type: 'action',
+						desc: 'Recompute normals, drop NaN vertices, rebuild bounds, sit on floor, center XZ, and refresh textures.',
+						run: () => this._fixGLTF(),
+					},
 				],
 			},
 			display: {
@@ -629,6 +956,27 @@ export class Viewer {
 						set: (v) => {
 							state.autoRotate = v;
 							this.updateDisplay();
+						},
+					},
+					{
+						key: 'followCamera',
+						label: 'Follow Camera',
+						type: 'bool',
+						desc: 'Camera tracks the model root position each frame. Useful for animated characters that translate around the scene.',
+						get: () => state.followCamera,
+						set: (v) => {
+							state.followCamera = v;
+						},
+					},
+					{
+						key: 'freePan',
+						label: 'Free Pan',
+						type: 'bool',
+						desc: 'Increase pan sensitivity and remove zoom cap so you can roam the scene freely.',
+						get: () => state.freePan,
+						set: (v) => {
+							state.freePan = v;
+							this._applyFreePan();
 						},
 					},
 					{
@@ -659,6 +1007,17 @@ export class Viewer {
 						set: (v) => {
 							state.grid = v;
 							this.updateDisplay();
+						},
+					},
+					{
+						key: 'ground',
+						label: 'Ground Plane',
+						type: 'bool',
+						desc: 'Show a subtle ground plane beneath the model so it does not appear to float.',
+						get: () => state.ground,
+						set: (v) => {
+							state.ground = v;
+							this._updateGround();
 						},
 					},
 					{
@@ -1001,12 +1360,23 @@ export class Viewer {
 		if (!this._defaults) return;
 		const groups = {
 			display: {
-				keys: ['background', 'autoRotate', 'wireframe', 'skeleton', 'grid', 'pointSize', 'bgColor'],
+				keys: [
+					'background',
+					'autoRotate',
+					'followCamera',
+					'freePan',
+					'wireframe',
+					'skeleton',
+					'grid',
+					'pointSize',
+					'bgColor',
+				],
 				apply: () => {
 					this.backgroundColor.set(this.state.bgColor);
 					if (this.updateBackground) this.updateBackground();
 					this.updateEnvironment();
 					this.updateDisplay();
+					this._applyFreePan();
 				},
 			},
 			lighting: {

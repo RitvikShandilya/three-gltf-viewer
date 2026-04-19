@@ -89,34 +89,7 @@ html, body {
 	isolation: isolate;
 }
 
-/* Subtle diagonal halftone field behind everything */
-.dropzone__halftone {
-	position: absolute;
-	inset: 0;
-	background-image:
-		repeating-linear-gradient(
-			45deg,
-			rgba(255, 255, 255, 0.035) 0px,
-			rgba(255, 255, 255, 0.035) 1px,
-			transparent 1px,
-			transparent 6px
-		),
-		radial-gradient(rgba(255, 255, 255, 0.04) 1px, transparent 1px);
-	background-size: auto, 4px 4px;
-	mix-blend-mode: screen;
-	pointer-events: none;
-	z-index: 0;
-}
-
-.dropzone__vignette {
-	position: absolute;
-	inset: 0;
-	background: radial-gradient(ellipse at center, transparent 45%, rgba(0, 0, 0, 0.85) 100%);
-	pointer-events: none;
-	z-index: 1;
-}
-
-/* ---------- Mission-briefing header ---------- */
+/* ---------- Dropzone header ---------- */
 .dropzone__header {
 	position: relative;
 	z-index: 2;
@@ -145,57 +118,13 @@ html, body {
 	text-shadow: 0 2px 24px rgba(0, 0, 0, 0.8);
 }
 
-/* Thin accent scanline that sweeps across the title every 6s */
-.dropzone__scanline {
-	position: absolute;
-	top: 0;
-	bottom: 0;
-	left: -20%;
-	width: 20%;
-	pointer-events: none;
-	background: linear-gradient(
-		90deg,
-		transparent 0%,
-		color-mix(in srgb, var(--accent) 35%, transparent) 35%,
-		color-mix(in srgb, var(--accent) 80%, transparent) 50%,
-		color-mix(in srgb, var(--accent) 35%, transparent) 65%,
-		transparent 100%
-	);
-	mix-blend-mode: screen;
-	filter: blur(1px);
-	animation: dz-scan 6s linear infinite;
-	z-index: 2;
-}
-
-@keyframes dz-scan {
-	0%   { transform: translateX(0%); opacity: 0; }
-	5%   { opacity: 1; }
-	45%  { opacity: 1; }
-	55%  { transform: translateX(600%); opacity: 0; }
-	100% { transform: translateX(600%); opacity: 0; }
-}
-
 .dropzone__sub {
 	margin: 18px 0 0;
 	font-weight: 500;
 	font-size: clamp(0.875rem, 1.1vw, 1rem);
 	letter-spacing: var(--tracking-loose);
 	text-transform: uppercase;
-	color: var(--accent);
-	text-shadow: 0 0 12px var(--accent-glow);
-}
-
-.dropzone__sub::before,
-.dropzone__sub::after {
-	content: '';
-	display: inline-block;
-	width: clamp(24px, 4vw, 56px);
-	height: 1px;
-	background: var(--accent);
-	box-shadow: 0 0 8px var(--accent-glow);
-	vertical-align: middle;
-	margin: 0 14px;
-	opacity: 0.8;
+	color: var(--text-dim);
 }
 
 .viewer {
@@ -266,20 +195,6 @@ html, body {
 		);
 }
 
-/* Mission-marker corner brackets */
-.dropzone__bracket {
-	position: absolute;
-	width: 26px;
-	height: 26px;
-	border: 2px solid var(--accent);
-	box-shadow: 0 0 12px var(--accent-glow);
-	pointer-events: none;
-}
-.dropzone__bracket--tl { top: -2px;    left: -2px;    border-right: 0; border-bottom: 0; }
-.dropzone__bracket--tr { top: -2px;    right: -2px;   border-left: 0;  border-bottom: 0; }
-.dropzone__bracket--bl { bottom: -2px; left: -2px;    border-right: 0; border-top: 0;    }
-.dropzone__bracket--br { bottom: -2px; right: -2px;   border-left: 0;  border-top: 0;    }
-
 /* Center upload glyph */
 .dropzone__glyph {
 	width: clamp(56px, 7vw, 80px);
@@ -327,7 +242,7 @@ html, body {
 	box-shadow: 0 0 18px var(--accent-glow);
 }
 
-/* ---------- Mission footer under the drop-target ---------- */
+/* ---------- Dropzone footer ---------- */
 .dropzone__footer {
 	position: relative;
 	z-index: 2;
@@ -341,29 +256,16 @@ html, body {
 	color: var(--text-dim);
 }
 
-.dropzone__hint--brand {
-	color: var(--accent);
-	font-weight: 500;
-}
-
 /* =============================================================
- * Drag-over feedback (practical: brightens the drop target
- * while a file is being dragged over the window, works both
- * over the initial dropzone and while the pause menu is open).
+ * Drag-over feedback — brightens the drop target perimeter while
+ * a file is being dragged over the window.
  * ============================================================= */
 
-/* Base transitions so the active state animates cleanly ~140ms */
 .placeholder {
 	transition:
 		outline-color 140ms var(--ease-gta),
 		background 140ms var(--ease-gta),
 		box-shadow 140ms var(--ease-gta);
-}
-.dropzone__bracket {
-	transition:
-		border-color 140ms var(--ease-gta),
-		box-shadow 140ms var(--ease-gta),
-		transform 140ms var(--ease-gta);
 }
 .dropzone__title {
 	transition:
@@ -389,10 +291,6 @@ html, body {
 		0 0 32px color-mix(in srgb, var(--accent) 30%, transparent);
 }
 
-.dropzone--active .dropzone__bracket {
-	animation: dz-bracket-pulse 900ms var(--ease-gta) infinite;
-}
-
 .dropzone--active .dropzone__title,
 .dropzone--active .dropzone__title-text {
 	color: var(--accent);
@@ -401,9 +299,6 @@ html, body {
 		0 0 32px var(--accent-glow);
 }
 
-/* Subtle dim of secondary copy during active drag — perimeter highlight
- * (border/outline/bracket above) is the primary signal. No shouty
- * "DROP TO LOAD" text; matches GTA V menu restraint. */
 .dropzone__target { position: relative; }
 
 .dropzone--active .placeholder > p,
@@ -411,29 +306,6 @@ html, body {
 .dropzone--active .upload-btn {
 	opacity: 0.55;
 	transition: opacity 140ms var(--ease-gta);
-}
-
-/* NOTE: The fullscreen "DROP TO LOAD" overlay was intentionally removed.
- * It was visually jarring and also suffered from sticky-state bugs when
- * drag events desynced. The perimeter highlight on `.dropzone--active`
- * above is sufficient feedback. */
-
-@keyframes dz-bracket-pulse {
-	0%, 100% {
-		border-color: var(--accent);
-		box-shadow: 0 0 12px var(--accent-glow);
-		transform: scale(1);
-	}
-	50% {
-		border-color: color-mix(in srgb, var(--accent) 100%, white 20%);
-		box-shadow: 0 0 22px var(--accent-glow), 0 0 36px var(--accent-glow);
-		transform: scale(1.06);
-	}
-}
-
-/* Respect reduced motion */
-@media (prefers-reduced-motion: reduce) {
-	.dropzone--active .dropzone__bracket { animation: none; }
 }
 
 /* =============================================================
@@ -478,14 +350,6 @@ body:not(.has-model) .pm__toggle {
 	-webkit-backdrop-filter: grayscale(1) blur(6px) brightness(0.35);
 	z-index: 0;
 	pointer-events: none;
-}
-
-.pm__vignette {
-	position: absolute;
-	inset: 0;
-	pointer-events: none;
-	background: radial-gradient(ellipse at center, transparent 50%, rgba(0, 0, 0, 0.7) 100%);
-	z-index: 1;
 }
 
 /* Push all pm__* content above the FX layers */
@@ -555,7 +419,8 @@ body:not(.has-model) .pm__toggle {
 	opacity: 1;
 }
 
-/* Keyboard focus ring — 1px amber, 0 offset (accessible) */
+/* Keyboard focus ring — 2px amber with 2px offset so it clears
+ * adjacent borders/fills and stays visible on accent-colored surfaces. */
 .pm__tab:focus-visible,
 .pm__row:focus-visible,
 .pm__toggle-btn:focus-visible,
@@ -565,9 +430,11 @@ body:not(.has-model) .pm__toggle {
 .pm__color-input:focus-visible,
 .pm__swatch:focus-visible,
 .pm__toggle:focus-visible,
+.pm__share:focus-visible,
+.pm__reset:focus-visible,
 .upload-btn input:focus-visible + label {
-	outline: 1px solid var(--accent);
-	outline-offset: 0;
+	outline: 2px solid var(--accent);
+	outline-offset: 2px;
 }
 
 .pm__meta {
@@ -805,11 +672,9 @@ body:not(.has-model) .pm__toggle {
 .pm__pane {
 	padding: 32px 48px;
 	overflow-y: auto;
-	scrollbar-width: thin;
-	scrollbar-color: var(--divider) transparent;
+	scrollbar-width: none;
 }
-.pm__pane::-webkit-scrollbar { width: 6px; }
-.pm__pane::-webkit-scrollbar-thumb { background: var(--divider); }
+.pm__pane::-webkit-scrollbar { display: none; }
 
 .pm__pane-inner {
 	animation: pm-crossfade var(--dur-cross) var(--ease-gta) both;
@@ -1128,7 +993,8 @@ body:not(.has-model) .pm__toggle {
 	font-size: var(--fs-meta);
 	letter-spacing: var(--tracking-loose);
 	text-transform: uppercase;
-	padding: 4px 10px;
+	padding: 6px 14px;
+	line-height: 1;
 	cursor: pointer;
 	transition:
 		color var(--dur-snap) linear,
@@ -1176,10 +1042,10 @@ body:not(.has-model) .pm__toggle {
 	display: inline-flex;
 	align-items: center;
 	gap: 8px;
-	padding: 8px 12px;
+	padding: 8px 14px;
 	background: rgba(0, 0, 0, 0.72);
 	border: 1px solid var(--divider);
-	border-radius: 2px;
+	border-radius: 0;
 	color: var(--text);
 	font-family: inherit;
 	font-size: var(--fs-meta);
@@ -1189,39 +1055,14 @@ body:not(.has-model) .pm__toggle {
 	cursor: pointer;
 	backdrop-filter: blur(4px);
 	-webkit-backdrop-filter: blur(4px);
-	transition: background var(--dur-snap) linear, color var(--dur-snap) linear, border-color var(--dur-snap) linear;
+	transition: background var(--dur-snap) linear, color var(--dur-snap) linear, border-color var(--dur-snap) linear, box-shadow var(--dur-snap) linear;
 }
 
 .pm__toggle:hover {
-	background: var(--focus-bg);
+	background: var(--accent);
 	color: var(--focus-fg);
-	border-color: var(--focus-bg);
-}
-
-.pm__toggle-icon {
-	display: inline-block;
-	flex: 0 0 auto;
-}
-
-.pm__toggle-label {
-	display: inline-block;
-}
-
-.pm__toggle-kbd {
-	display: inline-block;
-	padding: 2px 6px;
-	margin-left: 4px;
-	border: 1px solid var(--divider);
-	border-radius: 2px;
-	font-size: 10px;
-	font-weight: 500;
-	letter-spacing: var(--tracking-loose);
-	opacity: 0.75;
-}
-
-.pm__toggle:hover .pm__toggle-kbd {
-	border-color: var(--focus-fg);
-	opacity: 1;
+	border-color: var(--accent);
+	box-shadow: 0 0 12px var(--accent-glow);
 }
 
 .pm__toggle[hidden] { display: none; }
@@ -1230,82 +1071,357 @@ body[data-menu-open="false"] .pm__toggle { display: inline-flex; }
 body[data-menu-open="false"] .pm__toggle[hidden] { display: inline-flex; }
 
 /* =============================================================
- * Validation report
+ * Validation report — GTA V pause-menu styled
+ *   - Toggle pill: bottom-left, black bg, amber left-bar.
+ *   - Full-width report panel: fixed overlay, blurred, uppercase
+ *     title with hairline divider, summary line, hairline rows,
+ *     severity chips, bordered close button.
  * ============================================================= */
-.report {
-	padding: 2em;
-	max-width: 860px;
-	font-family: var(--font);
-	text-transform: uppercase;
-	letter-spacing: 0.02em;
-}
 
-.report h1 {
-	margin-top: 0;
-	font-size: 1.5rem;
-	font-weight: 400;
-	letter-spacing: var(--tracking);
-}
-
-.report p, .report ul {
-	line-height: 1.5em;
-	text-transform: none;
-}
-
-.report-table {
-	text-align: left;
-	border-collapse: collapse;
-	width: 100%;
-	font-size: 0.875rem;
-}
-
-.report-table thead tr {
-	background: #1a1a1a;
-	color: var(--text);
-	text-transform: uppercase;
-	letter-spacing: var(--tracking);
-}
-
-.report-table th, .report-table td {
-	padding: 0.5em 1em;
-	border-bottom: 1px solid var(--divider);
-}
-
+/* ---------- Toggle pill (before opening) ---------- */
 .report-toggle-wrap.hidden { display: none; }
 
 .report-toggle {
 	cursor: pointer;
-	display: flex;
+	display: inline-flex;
+	align-items: stretch;
 	position: fixed;
-	bottom: 48px;
-	left: 20px;
-	height: 32px;
-	background: var(--bg-solid);
+	bottom: 24px;
+	left: 24px;
+	height: 36px;
+	background: rgba(0, 0, 0, 0.92);
 	color: var(--text);
-	border-left: 4px solid var(--accent);
+	border: 1px solid var(--divider);
+	border-left: 6px solid var(--accent);
 	font-family: var(--font);
-	letter-spacing: var(--tracking);
+	font-weight: 500;
+	letter-spacing: var(--tracking-loose);
 	text-transform: uppercase;
 	z-index: 25;
+	backdrop-filter: blur(6px);
+	-webkit-backdrop-filter: blur(6px);
+	box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+	transition:
+		background var(--dur-snap) linear,
+		border-color var(--dur-snap) linear,
+		color var(--dur-snap) linear,
+		box-shadow var(--dur-snap) linear;
 }
 
-.report-toggle.level-1 { border-left-color: #FCB131; }
+.report-toggle:hover {
+	border-color: var(--accent);
+	box-shadow: 0 0 14px var(--accent-glow), 0 4px 16px rgba(0, 0, 0, 0.5);
+}
+
+/* Severity-coded left bar */
 .report-toggle.level-0 { border-left-color: #E6262C; }
+.report-toggle.level-1 { border-left-color: #FCB131; }
+.report-toggle.level-2 { border-left-color: #65B4D4; }
+.report-toggle.level-3 { border-left-color: #ABEDAB; }
 
 .report-toggle-text {
-	line-height: 32px;
-	padding: 0 0.75em;
+	line-height: 34px;
+	padding: 0 14px;
 	font-weight: 500;
-	font-size: 0.75rem;
+	font-size: 0.8125rem;   /* 13px */
+	letter-spacing: var(--tracking-loose);
 }
 
 .report-toggle-close {
-	width: 30px;
-	height: 32px;
-	line-height: 32px;
-	font-size: 1.25em;
+	width: 32px;
+	line-height: 34px;
+	font-size: 1.1em;
 	text-align: center;
 	cursor: pointer;
+	color: var(--text-dim);
+	border-left: 1px solid var(--divider);
+	transition: background var(--dur-snap) linear, color var(--dur-snap) linear;
+}
+
+.report-toggle-close:hover {
+	background: var(--hover);
+	color: var(--text);
+}
+
+/* Inline "FIX ISSUES" shortcut shown alongside the validator toggle when
+ * the validator reported errors or warnings. Click is stopPropagation'd
+ * in JS so the full report doesn't open simultaneously. */
+.report-toggle-fix {
+	height: 34px;
+	padding: 0 12px;
+	margin: 0;
+	border: 0;
+	border-left: 1px solid var(--divider);
+	background: transparent;
+	color: var(--accent, #FCB131);
+	font-weight: 600;
+	font-size: 0.75rem;   /* 12px */
+	letter-spacing: var(--tracking-loose);
+	cursor: pointer;
+	transition: background var(--dur-snap) linear, color var(--dur-snap) linear;
+}
+
+.report-toggle-fix:hover {
+	background: var(--hover);
+	color: var(--text);
+}
+
+/* ---------- Full report panel (after clicking the pill) ----------
+ * The `showLightbox()` handler in src/validator.js opens this in a
+ * new browser tab, pulling in this same stylesheet. The tab's inline
+ * <style> forces a white body background — we paint `.report` on top
+ * as a full-width black card so the GTA V aesthetic holds.
+ */
+.report {
+	position: fixed;
+	inset: 0;
+	width: 100%;
+	max-width: none;
+	max-height: 100vh;
+	padding: 40px 56px;
+	margin: 0;
+	overflow-y: auto;
+	background: rgba(0, 0, 0, 0.92);
+	backdrop-filter: blur(12px) saturate(1.1);
+	-webkit-backdrop-filter: blur(12px) saturate(1.1);
+	color: var(--text);
+	font-family: var(--font);
+	font-weight: 400;
+	letter-spacing: 0.02em;
+	text-transform: none;
+	scrollbar-width: thin;
+	scrollbar-color: var(--divider) transparent;
+	z-index: 50;
+}
+
+.report::-webkit-scrollbar { width: 8px; }
+.report::-webkit-scrollbar-track { background: transparent; }
+.report::-webkit-scrollbar-thumb { background: var(--divider); }
+
+.report h1 {
+	margin: 0 0 20px;
+	padding-bottom: 16px;
+	border-bottom: 1px solid var(--divider);
+	font-family: var(--font);
+	font-size: 2rem;
+	font-weight: 300;
+	letter-spacing: 0.1em;
+	text-transform: uppercase;
+	color: var(--text);
+}
+
+.report > ul {
+	list-style: none;
+	margin: 0 0 24px;
+	padding: 0;
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+	gap: 12px 32px;
+	font-family: var(--font);
+	font-weight: 400;
+	font-size: 0.9375rem;
+	letter-spacing: var(--tracking-loose);
+	text-transform: uppercase;
+	color: var(--text);
+	line-height: 1.5;
+}
+
+.report > ul > li {
+	padding: 10px 0;
+	border-bottom: 1px solid var(--divider);
+	overflow-wrap: anywhere;
+}
+
+.report > ul > li > ul {
+	list-style: none;
+	margin: 8px 0 0;
+	padding: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	font-size: 0.8125rem;
+	color: var(--text-dim);
+	text-transform: uppercase;
+	letter-spacing: var(--tracking);
+}
+
+.report > ul > li > ul > li {
+	padding: 2px 0;
+	border-bottom: 0;
+}
+
+.report b {
+	display: inline-block;
+	margin-right: 8px;
+	color: var(--text-dim);
+	font-weight: 500;
+	letter-spacing: var(--tracking-loose);
+}
+
+.report a {
+	color: var(--accent);
+	text-decoration: none;
+	border-bottom: 1px solid transparent;
+	transition: border-color var(--dur-snap) linear, color var(--dur-snap) linear;
+}
+
+.report a:hover {
+	color: var(--text);
+	border-bottom-color: var(--accent);
+}
+
+.report p {
+	margin: 16px 0;
+	font-family: var(--font);
+	font-weight: 400;
+	font-size: 0.875rem;
+	letter-spacing: var(--tracking);
+	line-height: 1.6;
+	color: var(--text-dim);
+	text-transform: uppercase;
+}
+
+.report p i {
+	font-style: normal;
+	color: var(--text-dim);
+}
+
+.report hr {
+	border: 0;
+	border-top: 1px solid var(--divider);
+	margin: 24px 0;
+}
+
+/* ---------- Report data tables ---------- */
+.report-table {
+	text-align: left;
+	border-collapse: collapse;
+	width: 100%;
+	margin: 12px 0 28px;
+	font-family: var(--font);
+	font-size: 0.8125rem;
+	letter-spacing: 0.02em;
+	color: var(--text);
+	font-variant-numeric: tabular-nums;
+	table-layout: fixed;
+}
+
+/* Severity chip header row — the background color is set inline on the
+ * <tr> by validator-table.jsx (error red, warning amber, etc.). We keep
+ * that but restyle it to feel like a GTA V pill: uppercase, tracked,
+ * thin divider below. */
+.report-table thead tr {
+	background: transparent !important; /* defeat inline color */
+}
+
+.report-table thead th {
+	padding: 10px 14px;
+	font-family: var(--font);
+	font-size: 0.75rem;
+	font-weight: 500;
+	letter-spacing: var(--tracking-loose);
+	text-transform: uppercase;
+	color: var(--text-dim);
+	border-bottom: 1px solid var(--divider);
+	text-align: left;
+	vertical-align: bottom;
+}
+
+/* Severity chip: first column header gets a coloured pill based on
+ * the table's section. We set this via attribute-independent classes
+ * added below by matching the inline background color written by JSX. */
+.report-table thead th:first-child {
+	position: relative;
+	padding-left: 14px;
+}
+
+.report-table thead th:first-child::before {
+	content: '';
+	display: inline-block;
+	vertical-align: middle;
+	width: 8px;
+	height: 8px;
+	margin-right: 10px;
+	background: var(--chip, var(--accent));
+	box-shadow: 0 0 8px var(--chip, var(--accent));
+}
+
+.report-table tbody tr {
+	transition: background var(--dur-snap) linear;
+}
+
+.report-table tbody tr:hover {
+	background: var(--hover);
+}
+
+.report-table td {
+	padding: 10px 14px;
+	border-bottom: 1px solid var(--divider);
+	vertical-align: top;
+	overflow-wrap: anywhere;
+	word-break: break-word;
+	line-height: 1.5;
+}
+
+.report-table td:first-child {
+	width: 30%;
+}
+
+.report-table td:last-child {
+	width: 22%;
+	color: var(--text-dim);
+}
+
+.report-table code {
+	font-family: 'SF Mono', Menlo, Consolas, 'Roboto Mono', monospace;
+	font-size: 0.8125rem;
+	color: var(--accent);
+	background: rgba(255, 255, 255, 0.04);
+	padding: 2px 6px;
+	letter-spacing: 0;
+	text-transform: none;
+}
+
+.report-table td:nth-child(2) {
+	color: var(--text);
+	text-transform: none;
+	letter-spacing: 0.01em;
+	font-family: var(--font);
+	font-size: 0.9375rem;
+}
+
+/* Target the inline background colors written by validator-report.jsx
+ * and convert them into thin amber / red / green / blue rules above each
+ * section. We use attribute selectors on the style string. */
+.report-table thead tr[style*="#f44336"] th:first-child::before { background: #E6262C; box-shadow: 0 0 10px rgba(230,38,44,0.5); }
+.report-table thead tr[style*="#f9a825"] th:first-child::before { background: #FCB131; box-shadow: 0 0 10px var(--accent-glow); }
+.report-table thead tr[style*="#8bc34a"] th:first-child::before { background: #ABEDAB; box-shadow: 0 0 10px rgba(171,237,171,0.5); }
+.report-table thead tr[style*="#2196f3"] th:first-child::before { background: #65B4D4; box-shadow: 0 0 10px rgba(101,180,212,0.5); }
+
+/* Section title chip replacement: the <th> with title text ("Error" /
+ * "Warning" / "Hint" / "Info") gets restyled to look like a pill. */
+.report-table thead tr[style*="#f44336"] th:first-child { color: #E6262C; }
+.report-table thead tr[style*="#f9a825"] th:first-child { color: #FCB131; }
+.report-table thead tr[style*="#8bc34a"] th:first-child { color: #ABEDAB; }
+.report-table thead tr[style*="#2196f3"] th:first-child { color: #65B4D4; }
+
+.report-table thead tr[style*="#f44336"] th,
+.report-table thead tr[style*="#f9a825"] th,
+.report-table thead tr[style*="#8bc34a"] th,
+.report-table thead tr[style*="#2196f3"] th {
+	padding-top: 22px;
+	font-weight: 600;
+	font-size: 0.8125rem;
+}
+
+/* Responsive: collapse the report padding on small screens so
+ * nothing blows out of the viewport. */
+@media (max-width: 900px) {
+	.report { padding: 24px 20px; }
+	.report h1 { font-size: 1.5rem; }
+	.report > ul { grid-template-columns: 1fr; gap: 8px; }
+	.report-table { font-size: 0.75rem; }
+	.report-table td, .report-table th { padding: 8px 10px; }
 }
 
 /* =============================================================
@@ -1346,135 +1462,20 @@ body[data-menu-open="false"] .pm__toggle[hidden] { display: inline-flex; }
 .spinner::before { top: 0; }
 .spinner::after  { bottom: 0; }
 
-/* Deck holding the four rotating cards */
-.spinner__deck {
-	position: absolute;
-	inset: 0;
-}
-
-/* A single character-art card */
-.spinner__card {
-	position: absolute;
-	inset: 0;
-	opacity: 0;
-	animation: gta-card-cycle 8s infinite var(--ease-gta, cubic-bezier(0, 0.55, 0.45, 1));
-	will-change: opacity;
-}
-.spinner__card:nth-child(1) { animation-delay: 0s;    --card-tint: #FCB131; } /* amber / Lester */
-.spinner__card:nth-child(2) { animation-delay: 2s;    --card-tint: #65B4D4; } /* Michael */
-.spinner__card:nth-child(3) { animation-delay: 4s;    --card-tint: #ABEDAB; } /* Franklin */
-.spinner__card:nth-child(4) { animation-delay: 6s;    --card-tint: #FFA357; } /* Trevor */
-
-/* Each card = a dark gradient backdrop + centered SVG silhouette + halftone + grain */
-.spinner__card-bg {
-	position: absolute;
-	inset: 0;
-	background:
-		radial-gradient(ellipse at 30% 30%, color-mix(in srgb, var(--card-tint) 55%, transparent) 0%, transparent 55%),
-		radial-gradient(ellipse at 75% 80%, color-mix(in srgb, var(--card-tint) 35%, transparent) 0%, transparent 60%),
-		linear-gradient(160deg, #0a0a0a 0%, #050505 60%, #000 100%);
-}
-
-.spinner__card-art {
-	position: absolute;
-	inset: 0;
-	display: grid;
-	place-items: center;
-}
-
-.spinner__card-art svg {
-	width: min(62vmin, 720px);
-	height: auto;
-	filter: drop-shadow(0 10px 40px rgba(0, 0, 0, 0.8));
-}
-
-/* Halftone diagonal stripes over the art */
-.spinner__card-halftone {
-	position: absolute;
-	inset: 0;
-	background-image: repeating-linear-gradient(
-		45deg,
-		rgba(0, 0, 0, 0.35) 0px,
-		rgba(0, 0, 0, 0.35) 1px,
-		transparent 1px,
-		transparent 4px
-	);
-	mix-blend-mode: multiply;
-	opacity: 0.55;
-	pointer-events: none;
-}
-
-/* Fine noise / grain via radial stipple */
-.spinner__card-grain {
-	position: absolute;
-	inset: 0;
-	background-image:
-		radial-gradient(rgba(255, 255, 255, 0.06) 1px, transparent 1px),
-		radial-gradient(rgba(0, 0, 0, 0.25) 1px, transparent 1px);
-	background-size: 3px 3px, 5px 5px;
-	background-position: 0 0, 1px 2px;
-	mix-blend-mode: overlay;
-	opacity: 0.35;
-	pointer-events: none;
-}
-
-/* Vignette around the edges */
-.spinner__vignette {
-	position: absolute;
-	inset: 0;
-	background: radial-gradient(ellipse at center, transparent 55%, rgba(0, 0, 0, 0.85) 100%);
-	pointer-events: none;
-	z-index: 3;
-}
-
-/* LOADING text bottom-right */
+/* LOADING text — anchored above the progress bar */
 .spinner__loading {
 	position: absolute;
-	right: clamp(20px, 4vw, 56px);
-	bottom: clamp(16px, 3vw, 40px);
-	display: flex;
-	align-items: baseline;
-	gap: 0.2em;
+	left: 50%;
+	bottom: calc(clamp(28px, 5vw, 56px) + 40px);
+	transform: translateX(-50%);
 	font-family: var(--font);
 	font-weight: 500;
-	font-size: clamp(1.25rem, 2.1vw, 1.75rem);
+	font-size: clamp(1rem, 1.6vw, 1.25rem);
 	letter-spacing: 0.14em;
+	text-transform: uppercase;
 	color: var(--text);
 	text-shadow: 0 2px 18px rgba(0, 0, 0, 0.9);
 	z-index: 6;
-}
-
-.spinner__loading-label {
-	color: var(--text);
-}
-
-.spinner__dots {
-	display: inline-flex;
-	gap: 0.12em;
-}
-
-.spinner__dots span {
-	display: inline-block;
-	opacity: 0.15;
-	animation: gta-dot 1.2s infinite steps(1, end);
-	color: var(--accent);
-}
-.spinner__dots span:nth-child(1) { animation-delay: 0s; }
-.spinner__dots span:nth-child(2) { animation-delay: 0.3s; }
-.spinner__dots span:nth-child(3) { animation-delay: 0.6s; }
-
-@keyframes gta-dot {
-	0%, 100% { opacity: 0.15; }
-	25%      { opacity: 1; }
-}
-
-/* 4-card crossfade: each card has a 2s visible window inside an 8s loop */
-@keyframes gta-card-cycle {
-	0%   { opacity: 0; transform: scale(1.02); }
-	3%   { opacity: 1; transform: scale(1.00); }
-	25%  { opacity: 1; transform: scale(0.995); }
-	28%  { opacity: 0; transform: scale(0.99); }
-	100% { opacity: 0; transform: scale(0.99); }
 }
 
 /* =============================================================
@@ -1553,11 +1554,6 @@ body[data-menu-open="false"] .pm__toggle[hidden] { display: inline-flex; }
 		animation-iteration-count: 1 !important;
 		transition-duration: 1ms !important;
 	}
-	/* Show only the first loading card statically, keep dots subtle */
-	.spinner__card { animation: none !important; opacity: 0; }
-	.spinner__card:nth-child(1) { opacity: 1; }
-	.spinner__card-art { animation: none !important; transform: none !important; }
-	.spinner__dots span { animation: none !important; opacity: 0.6 !important; }
 	.pm__progress-bar { transition: none !important; animation: none !important; }
 	.pm__progress--indeterminate .pm__progress-bar { width: 100% !important; }
 }
@@ -1587,8 +1583,8 @@ body[data-menu-open="false"] .pm__toggle[hidden] { display: inline-flex; }
 	width: 100%;
 	max-width: 400px;
 	padding: 12px 16px 12px 18px;
-	background: rgba(0, 0, 0, 0.85);
-	color: var(--text, #F0F0F0);
+	background: var(--bg);
+	color: var(--text);
 	border-left: 6px solid var(--accent, #FCB131);
 	border-top: 1px solid rgba(255, 255, 255, 0.06);
 	border-right: 1px solid rgba(255, 255, 255, 0.06);
