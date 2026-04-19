@@ -3,7 +3,7 @@
 <head>
 	<meta charset="utf-8" />
 	<meta http-equiv="X-UA-Compatible" content="IE=edge" />
-	<title>glTF Viewer · Pause Menu</title>
+	<title>glTF Viewer</title>
 	<meta
 		name="viewport"
 		content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"
@@ -25,55 +25,36 @@
 	<!-- 3D viewport layer -->
 	<main class="wrap">
 		<div class="dropzone">
-			<div class="dropzone__halftone" aria-hidden="true"></div>
-			<div class="dropzone__vignette" aria-hidden="true"></div>
-
 			<header class="dropzone__header">
 				<h1 class="dropzone__title">
-					<span class="dropzone__title-text">GLTF VIEWER // REMASTERED</span>
-					<span class="dropzone__scanline" aria-hidden="true"></span>
+					<span class="dropzone__title-text">glTF Viewer</span>
 				</h1>
-				<p class="dropzone__sub">LOAD ASSET</p>
+				<p class="dropzone__sub">Load a model to begin</p>
 			</header>
 
 			<div class="placeholder dropzone__target" role="group" aria-label="Drop target">
-				<span class="dropzone__bracket dropzone__bracket--tl" aria-hidden="true"></span>
-				<span class="dropzone__bracket dropzone__bracket--tr" aria-hidden="true"></span>
-				<span class="dropzone__bracket dropzone__bracket--bl" aria-hidden="true"></span>
-				<span class="dropzone__bracket dropzone__bracket--br" aria-hidden="true"></span>
-
 				<svg class="dropzone__glyph" viewBox="0 0 64 64" aria-hidden="true" focusable="false">
-					<circle cx="32" cy="32" r="28" fill="none" stroke="currentColor" stroke-width="1.2" stroke-dasharray="3 4" opacity="0.6" />
 					<path d="M32 44 L32 20 M22 30 L32 20 L42 30" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square" stroke-linejoin="miter" />
 					<line x1="20" y1="48" x2="44" y2="48" stroke="currentColor" stroke-width="2" stroke-linecap="square" />
 				</svg>
 
-				<p>DRAG GLTF 2.0 FILE OR FOLDER</p>
+				<p>Drag a .gltf, .glb, or .zip file here</p>
 				<div class="upload-btn">
 					<input type="file" name="file-input[]" id="file-input" multiple />
-					<label for="file-input"><span>CHOOSE FILE</span></label>
+					<label for="file-input"><span>Choose file</span></label>
 				</div>
 			</div>
 
 			<footer class="dropzone__footer">
-				<span class="dropzone__hint">SUPPORTS .GLTF / .GLB / ZIP</span>
-				<span class="dropzone__hint dropzone__hint--brand">MISSION READY</span>
+				<span class="dropzone__hint">Supports .gltf / .glb / .zip</span>
 			</footer>
 		</div>
 		<div class="spinner"></div>
 	</main>
 
-	<!-- Pause menu overlay (fills screen on top of viewer) -->
+	<!-- Settings overlay -->
 	<section class="pm" aria-label="Settings Menu" aria-modal="false">
 		<div class="pm__backdrop" aria-hidden="true"></div>
-		<svg class="pm__grain" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
-			<filter id="pm-noise">
-				<feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="2" stitchTiles="stitch" />
-				<feColorMatrix values="0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 .08 0" />
-			</filter>
-			<rect width="100%" height="100%" filter="url(#pm-noise)" />
-		</svg>
-		<div class="pm__vignette" aria-hidden="true"></div>
 
 		<header class="pm__topbar">
 			<nav class="pm__tabs" id="pm-tabs" role="tablist" aria-label="Menu sections"></nav>
@@ -105,19 +86,16 @@
 		</div>
 
 		<footer class="pm__footer">
-			<span class="pm__hint"><kbd>↑↓</kbd> NAVIGATE</span>
-			<span class="pm__hint"><kbd>←→</kbd> CHANGE</span>
-			<span class="pm__hint"><kbd>TAB</kbd> SECTION</span>
-			<span class="pm__hint"><kbd>/</kbd> SEARCH</span>
-			<span class="pm__hint"><kbd>ESC</kbd> TOGGLE</span>
+			<span class="pm__hint"><kbd>ESC</kbd> Close</span>
+			<span class="pm__hint"><kbd>↑↓</kbd> Navigate</span>
+			<span class="pm__hint"><kbd>←→</kbd> Change</span>
 			<span class="pm__spacer"></span>
-			<button class="pm__share" id="pm-share" type="button" aria-label="Copy shareable link to clipboard">COPY LINK</button>
-			<span class="pm__hint pm__hint--brand">GLTF VIEWER // REMASTERED</span>
+			<button class="pm__share" id="pm-share" type="button" aria-label="Copy shareable link to clipboard">Copy link</button>
 		</footer>
 	</section>
 
 	<button class="pm__toggle" id="pm-toggle" aria-label="Open settings menu">
-		<span>PAUSE</span>
+		<span>Menu</span>
 	</button>
 
 	<!-- Toast notifications container (for errors/status) -->

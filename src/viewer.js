@@ -147,7 +147,6 @@ export class Viewer {
 		this.stats.update();
 		this.mixer && this.mixer.update(dt);
 		this.render();
-		this._updateRadarHUD();
 
 		this.prevTime = time;
 	}
@@ -492,28 +491,9 @@ export class Viewer {
 	 * See: https://stackoverflow.com/q/16226693/1314762
 	 */
 	addAxesHelper() {
-		// GTA V-style radar minimap frame that wraps the 3D axes gizmo.
-		this.radarFrame = document.createElement('div');
-		this.radarFrame.classList.add('radar');
-		this.radarFrame.setAttribute('aria-hidden', 'true');
-		this.radarFrame.innerHTML = `
-			<div class="radar__scanlines" aria-hidden="true"></div>
-			<span class="radar__label">CAM</span>
-			<div class="radar__compass" aria-hidden="true">
-				<span class="radar__compass-n">N</span>
-			</div>
-			<span class="radar__zoom">×1.0</span>
-		`;
-		this.el.appendChild(this.radarFrame);
-
 		this.axesDiv = document.createElement('div');
-		this.radarFrame.appendChild(this.axesDiv);
+		this.el.appendChild(this.axesDiv);
 		this.axesDiv.classList.add('axes');
-
-		// Cache references for per-frame updates.
-		this.radarCompass = this.radarFrame.querySelector('.radar__compass');
-		this.radarZoom = this.radarFrame.querySelector('.radar__zoom');
-		this._radarInitialDistance = null;
 
 		const { clientWidth, clientHeight } = this.axesDiv;
 
@@ -530,30 +510,6 @@ export class Viewer {
 		this.axesCorner = new AxesHelper(5);
 		this.axesScene.add(this.axesCorner);
 		this.axesDiv.appendChild(this.axesRenderer.domElement);
-	}
-
-	_updateRadarHUD() {
-		if (!this.radarFrame || !this.controls) return;
-		// Compass: rotate N marker opposite to camera heading around target.
-		if (this.radarCompass) {
-			const offset = this.defaultCamera.position.clone().sub(this.controls.target);
-			const heading = Math.atan2(offset.x, offset.z); // radians
-			const deg = -(heading * 180) / Math.PI;
-			this.radarCompass.style.transform = `rotate(${deg.toFixed(1)}deg)`;
-		}
-		// Zoom: ratio of initial-to-current OrbitControls distance.
-		if (this.radarZoom) {
-			const dist = this.defaultCamera.position.distanceTo(this.controls.target);
-			if (
-				this._radarInitialDistance == null ||
-				!isFinite(this._radarInitialDistance) ||
-				this._radarInitialDistance === 0
-			) {
-				this._radarInitialDistance = dist || 1;
-			}
-			const ratio = this._radarInitialDistance / (dist || 1);
-			this.radarZoom.textContent = `×${ratio.toFixed(1)}`;
-		}
 	}
 
 	addGUI() {
@@ -648,13 +604,6 @@ export class Viewer {
 						type: 'brief',
 						view: 'materials',
 						desc: 'Swatch grid of every material\u2019s base color.',
-					},
-					{
-						key: 'export',
-						label: 'Export',
-						type: 'brief',
-						view: 'export',
-						desc: 'Scene load status and asset readiness indicators.',
 					},
 				],
 			},
@@ -846,17 +795,6 @@ export class Viewer {
 			animation: { label: 'ANIMATION', rows: this._buildAnimRows() },
 			morph: { label: 'MORPH', rows: this._buildMorphRows() },
 			cameras: { label: 'CAMERAS', rows: this._buildCameraRows() },
-			performance: {
-				label: 'PERFORMANCE',
-				rows: [
-					{
-						key: 'stats',
-						label: 'Performance Monitor',
-						type: 'stats',
-						desc: 'Frames-per-second, memory, and per-frame milliseconds. Click the panel to cycle metrics.',
-					},
-				],
-			},
 		});
 	}
 
@@ -1189,7 +1127,7 @@ export class Viewer {
 
 		const title = document.createElement('div');
 		title.className = 'pm__rail-title';
-		title.textContent = `${section.label} // ${rows.length}`;
+		title.textContent = `${section.label} · ${rows.length}`;
 		railEl.appendChild(title);
 
 		if (!rows.length) {
@@ -1285,19 +1223,10 @@ export class Viewer {
 					<h2 class="pm__pane-title"></h2>
 				</div>
 				<p class="pm__pane-sub"></p>
-				<div class="pm__empty-state" role="status" aria-label="${sectionLabel} unavailable">
-					<svg class="pm__empty-state__icon" viewBox="0 0 64 64" aria-hidden="true" focusable="false">
-						<rect x="14" y="28" width="36" height="26" fill="none" stroke="currentColor" stroke-width="2"/>
-						<path d="M22 28 V18 a10 10 0 0 1 20 0 V28" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square"/>
-						<circle cx="32" cy="40" r="3" fill="currentColor"/>
-						<line x1="32" y1="42" x2="32" y2="48" stroke="currentColor" stroke-width="2"/>
-					</svg>
-					<span class="pm__empty-state__stamp">OFFLINE</span>
-					<p class="pm__empty-state__hint">Load a model to unlock ${sectionLabel.toLowerCase()} controls.</p>
-				</div>
+				<p class="pm__empty"><em>No items yet.</em> Load a model to see ${sectionLabel.toLowerCase()} controls.</p>
 			`;
 			inner.querySelector('.pm__pane-title').textContent = sectionLabel;
-			inner.querySelector('.pm__pane-sub').textContent = `${sectionLabel} // LOCKED`;
+			inner.querySelector('.pm__pane-sub').textContent = sectionLabel;
 			paneEl.innerHTML = '';
 			paneEl.appendChild(inner);
 			return;
@@ -1305,10 +1234,7 @@ export class Viewer {
 
 		const isMap = row.type === 'map';
 		const isBrief = row.type === 'brief';
-		let title;
-		if (isMap) title = 'MODEL SCHEMATIC';
-		else if (isBrief) title = 'ASSET BRIEFING';
-		else title = String(row.label).toUpperCase();
+		const title = String(row.label).toUpperCase();
 		inner.innerHTML = `
 			<div class="pm__pane-title-row">
 				<h2 class="pm__pane-title"></h2>
@@ -1327,11 +1253,7 @@ export class Viewer {
 			resetBtn.addEventListener('click', () => this._resetTab(tabKey));
 			titleRow.appendChild(resetBtn);
 		}
-		let sub;
-		if (isMap) sub = `MAP // ${String(row.label).toUpperCase()}`;
-		else if (isBrief) sub = `BRIEF // ${String(row.label).toUpperCase()}`;
-		else sub = `${section.label} // ${row.type.toUpperCase()}`;
-		inner.querySelector('.pm__pane-sub').textContent = sub;
+		inner.querySelector('.pm__pane-sub').textContent = section.label;
 
 		paneEl.innerHTML = '';
 		paneEl.appendChild(inner);
@@ -1697,7 +1619,7 @@ export class Viewer {
 		if (!hasModel) {
 			const empty = document.createElement('p');
 			empty.className = 'pm__empty pm__map-empty';
-			empty.textContent = 'NO MODEL LOADED';
+			empty.innerHTML = '<em>No model loaded.</em>';
 			wrap.appendChild(empty);
 		}
 
@@ -1861,28 +1783,10 @@ export class Viewer {
 		shell.className = 'pm__brief-shell';
 		shell.setAttribute('data-view', view);
 
-		const header = document.createElement('div');
-		header.className = 'pm__brief-header';
-		header.innerHTML = `
-			<div class="pm__brief-header-top">
-				<span class="pm__brief-eyebrow">CLASSIFIED // MISSION PACKET</span>
-				<span class="pm__brief-eyebrow"></span>
-			</div>
-			<h3 class="pm__brief-headline">ASSET BRIEFING</h3>
-			<div class="pm__brief-divider"></div>
-		`;
-		header.querySelectorAll('.pm__brief-eyebrow')[1].textContent = `SECTION ${String(
-			view,
-		).toUpperCase()}`;
-		shell.appendChild(header);
-
 		if (noModel) {
-			const empty = document.createElement('div');
-			empty.className = 'pm__brief-empty';
-			empty.innerHTML = `
-				<span class="pm__brief-stamp">AWAITING TARGET</span>
-				<p class="pm__empty">Load a glTF asset to populate the briefing packet.</p>
-			`;
+			const empty = document.createElement('p');
+			empty.className = 'pm__empty';
+			empty.innerHTML = '<em>No items yet.</em> Load a glTF asset to see model details.';
 			shell.appendChild(empty);
 			editorEl.appendChild(shell);
 			return;
@@ -2017,25 +1921,6 @@ export class Viewer {
 		matsSec.appendChild(swatches);
 		shell.appendChild(matsSec);
 
-		const prog = document.createElement('section');
-		prog.className = 'pm__brief-section';
-		prog.setAttribute('data-section', 'export');
-		prog.setAttribute('data-active', view === 'export' ? 'true' : 'false');
-		prog.innerHTML = `
-			<div class="pm__brief-section-head">
-				<span class="pm__brief-section-title">SCENE LOAD</span>
-				<span class="pm__brief-section-count">100%</span>
-			</div>
-			<div class="pm__brief-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="100">
-				<div class="pm__brief-progress-fill"></div>
-			</div>
-			<p class="pm__brief-signoff"></p>
-		`;
-		prog.querySelector('.pm__brief-signoff').textContent = `READY FOR DEPLOYMENT // ${new Date()
-			.toISOString()
-			.split('T')[0]}`;
-		shell.appendChild(prog);
-
 		editorEl.appendChild(shell);
 	}
 
@@ -2161,6 +2046,11 @@ export class Viewer {
 	}
 
 	_onKey(e) {
+		// Ignore all keyboard shortcuts (including Escape toggling the
+		// pause menu) until a model has actually been loaded. Before
+		// that, the user only sees the dropzone — there's no menu to
+		// toggle and no navigation to perform.
+		if (!document.body.classList.contains('has-model')) return;
 		if (e.key === 'Escape') {
 			const open = document.body.dataset.menuOpen === 'true';
 			this._setMenuOpen(!open);
@@ -2286,12 +2176,6 @@ export class Viewer {
 		}
 		this._renderRail();
 		this._renderPane();
-
-		// Auto-open menu on first model load.
-		if (!this.ui.menuAutoOpened && !this.options.kiosk) {
-			this.ui.menuAutoOpened = true;
-			this._setMenuOpen(true);
-		}
 	}
 
 	clear() {
